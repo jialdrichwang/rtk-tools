@@ -1,0 +1,6 @@
+{
+  "name": "RTK 测量工具箱",
+  "description": "专业级手持GNSS/RTK工程测量与GIS测绘工具箱系统，支持航点航线标定、工程放样、坐标转换、高精采集与数据管理",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
