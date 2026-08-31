@@ -112,6 +112,11 @@ export interface RTKState {
   mode: 'simulated' | 'real_gps' | 'ntrip_cors';
   screenRotation: 0 | 180;
   antennaHeight: number; // 天线高 (m)
+  realGpsStatus?: 'idle' | 'locating' | 'locked' | 'denied' | 'error';
+  realGpsAccuracy?: number; // 真实GPS精度 (m)
+  realGpsMessage?: string;
+  realGpsFrequencyHz?: number; // 实际实时刷新率 (Hz)
+  targetSamplingHz?: number; // 目标刷新率 (默认 4Hz，大于2Hz)
 }
 
 export interface UnitSettings {

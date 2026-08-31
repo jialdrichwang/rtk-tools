@@ -131,6 +131,24 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
 
         {/* Right Status Actions */}
         <div className="flex items-center gap-2">
+          {/* Positioning Source Indicator */}
+          <button
+            onClick={onOpenNtrip}
+            id="btn-top-gps-mode-badge"
+            title="点击切换定位源与CORS差分设定（当前支持 >2Hz 物理高频刷新）"
+            className={`px-2 py-0.5 rounded text-[11px] font-bold border transition cursor-pointer flex items-center gap-1 ${
+              rtkState.mode === 'real_gps'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+            }`}
+          >
+            <span>
+              {rtkState.mode === 'real_gps'
+                ? `🛰️ 真机 ${(rtkState.realGpsFrequencyHz || 4.0).toFixed(1)}Hz`
+                : '🕹️ 仿真'}
+            </span>
+          </button>
+
           {/* RTK Solution Button (clickable to cycle in simulation) */}
           <button
             onClick={handleCycleSolution}

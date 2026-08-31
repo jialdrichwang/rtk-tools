@@ -17,6 +17,7 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
     isNtripConnected,
     connectNtrip,
     disconnectNtrip,
+    setTargetSamplingHz,
   } = useRTK();
 
   const [ip, setIp] = useState(ntripConfig.ip);
@@ -61,7 +62,17 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
         <div className="p-4 space-y-3.5 overflow-y-auto">
           {/* Position Source Mode Selector */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
-            <label className="text-xs font-bold text-slate-800 block">定位数据源 (Positioning Source)</label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 block">定位数据源 (Positioning Source)</label>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                rtkState.mode === 'real_gps'
+                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+              }`}>
+                {rtkState.mode === 'real_gps' ? '机内真机GNSS传感器' : '高精仿真 (可点击地图取点)'}
+              </span>
+            </div>
+            
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -94,6 +105,70 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                 <span>真机GPS传感器</span>
               </button>
             </div>
+
+            {/* Real GPS Sensor Status Diagnostic & High Rate Control Details */}
+            {rtkState.mode === 'real_gps' && (
+              <div className="mt-2 p-2.5 rounded-lg bg-emerald-50/80 border border-emerald-200 text-xs text-slate-700 space-y-2">
+                <div className="flex items-center justify-between text-emerald-900 font-semibold">
+                  <span>硬件传感器状态:</span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    {rtkState.realGpsStatus === 'locked'
+                      ? '已锁定真机GNSS'
+                      : rtkState.realGpsStatus === 'locating'
+                      ? '定位搜星中...'
+                      : rtkState.realGpsStatus === 'denied'
+                      ? '权限受限'
+                      : '就绪'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  {rtkState.realGpsMessage || '已连接手机/平板原生定位服务，并过滤地图点击篡改。'}
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] border-t border-emerald-200/60 pt-1.5 font-mono">
+                  <span className="text-emerald-900 font-sans">实时物理刷新率:</span>
+                  <span className="font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded border border-emerald-300">
+                    {(rtkState.realGpsFrequencyHz || 4.0).toFixed(1)} Hz (&gt;2Hz 高速)
+                  </span>
+                </div>
+
+                {rtkState.realGpsAccuracy !== undefined && (
+                  <div className="text-[11px] text-emerald-800 font-mono flex items-center justify-between">
+                    <span className="font-sans">原生传感器精度:</span>
+                    <span>±{rtkState.realGpsAccuracy.toFixed(1)} 米</span>
+                  </div>
+                )}
+
+                {/* Sampling Frequency Buttons */}
+                <div className="space-y-1 pt-1 border-t border-emerald-200/60">
+                  <div className="text-[10px] font-bold text-emerald-900 uppercase">
+                    硬件数据采集刷新率设定 (&gt;2Hz):
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {[
+                      { hz: 2.5, label: '2.5 Hz' },
+                      { hz: 4.0, label: '4.0 Hz (标准)' },
+                      { hz: 5.0, label: '5.0 Hz (推荐)' },
+                      { hz: 10.0, label: '10 Hz (极限)' },
+                    ].map((item) => (
+                      <button
+                        key={item.hz}
+                        type="button"
+                        onClick={() => setTargetSamplingHz(item.hz)}
+                        className={`py-1 rounded text-[10px] font-mono font-bold transition cursor-pointer border ${
+                          (rtkState.targetSamplingHz || 4.0) === item.hz
+                            ? 'bg-emerald-600 border-emerald-700 text-white shadow-2xs'
+                            : 'bg-white/90 border-emerald-300 text-emerald-900 hover:bg-emerald-100'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Quick RTK Solution Quality Override */}
