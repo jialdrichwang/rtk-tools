@@ -123,8 +123,8 @@ export const EngineeringSurveyScreen: React.FC<EngineeringSurveyScreenProps> = (
 
   return (
     <div className="flex-1 flex flex-col bg-[#F1F5F9] text-slate-800 p-3.5 overflow-y-auto">
-      {/* 10 Specialized Survey Tools Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+      {/* 10 Specialized Survey Tools Grid (Compact 1/2 Area) */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
         {surveyTools.map((t) => {
           const Icon = t.icon;
           return (
@@ -135,17 +135,17 @@ export const EngineeringSurveyScreen: React.FC<EngineeringSurveyScreenProps> = (
                 soundService.playClick();
                 t.action();
               }}
-              className="bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-200 hover:border-blue-400 rounded-2xl p-3.5 flex flex-col items-center justify-center text-center transition active:scale-95 shadow-xs group cursor-pointer"
+              className="bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-200 hover:border-blue-400 rounded-xl p-2 flex flex-col items-center justify-center text-center transition active:scale-95 shadow-2xs group cursor-pointer min-h-[66px]"
             >
               <div
-                className={`w-12 h-12 rounded-xl flex items-center justify-center border ${t.color} mb-2 group-hover:scale-105 transition-transform shadow-2xs`}
+                className={`w-8 h-8 rounded-lg flex items-center justify-center border ${t.color} mb-1 group-hover:scale-105 transition-transform shadow-2xs`}
               >
-                <Icon className="w-6 h-6" />
+                <Icon className="w-4 h-4" />
               </div>
-              <span className="text-xs font-bold text-slate-800 group-hover:text-blue-600">
+              <span className="text-[11px] font-bold text-slate-800 group-hover:text-blue-600 leading-tight">
                 {t.title}
               </span>
-              <span className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">
+              <span className="text-[9px] text-slate-500 mt-0.5 line-clamp-1 scale-95">
                 {t.desc}
               </span>
             </button>

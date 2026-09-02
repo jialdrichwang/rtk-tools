@@ -9,6 +9,8 @@ import {
   Wrench,
   FolderGit2,
   Crosshair,
+  Square,
+  HardDrive,
   Activity,
 } from 'lucide-react';
 import { soundService } from '../../utils/sound';
@@ -16,10 +18,18 @@ import { soundService } from '../../utils/sound';
 interface HomeScreenProps {
   onNavigate: (screen: any) => void;
   onOpenExportModal?: () => void;
+  onOpenStorageModal?: () => void;
 }
 
-export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
-  const { currentProject, points, routes, tracks } = useSurveyData();
+export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onOpenStorageModal }) => {
+  const {
+    currentProject,
+    points,
+    routes,
+    tracks,
+    activeRecording,
+    stopTrackRecording,
+  } = useSurveyData();
   const { rtkState } = useRTK();
 
   const menuItems = [
@@ -30,7 +40,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: MapPin,
       badge: `${points.length} 个点`,
       topColor: 'bg-blue-500',
-      iconBg: 'bg-blue-50 text-blue-600 border-blue-100',
+      bgColor: '#47beee',
+      textColor: '#000000',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-blue-400',
     },
     {
@@ -40,7 +52,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: ListOrdered,
       badge: `${points.length} 点`,
       topColor: 'bg-indigo-500',
-      iconBg: 'bg-indigo-50 text-indigo-600 border-indigo-100',
+      bgColor: '#34a8d4',
+      textColor: '#000000',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-indigo-400',
     },
     {
@@ -50,7 +64,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: Route,
       badge: `${routes.length}条规划 / ${tracks.length}条实录`,
       topColor: 'bg-teal-500',
-      iconBg: 'bg-teal-50 text-teal-600 border-teal-100',
+      bgColor: '#3a9ee3',
+      textColor: '#090909',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-teal-400',
     },
     {
@@ -60,7 +76,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: Globe2,
       badge: '卫星 / 矢量',
       topColor: 'bg-sky-500',
-      iconBg: 'bg-sky-50 text-sky-600 border-sky-100',
+      bgColor: '#48aeea',
+      textColor: '#050505',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-sky-400',
     },
     {
@@ -70,7 +88,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: Crosshair,
       badge: '10种测量',
       topColor: 'bg-rose-500',
-      iconBg: 'bg-rose-50 text-rose-600 border-rose-100',
+      bgColor: '#2dbfed',
+      textColor: '#0e0e0f',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-rose-400',
     },
     {
@@ -80,7 +100,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: FolderGit2,
       badge: currentProject.coordSystem,
       topColor: 'bg-purple-500',
-      iconBg: 'bg-purple-50 text-purple-600 border-purple-100',
+      bgColor: '#34a8d4',
+      textColor: '#040404',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-purple-400',
     },
     {
@@ -90,7 +112,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
       icon: Wrench,
       badge: '数据与工具',
       topColor: 'bg-amber-500',
-      iconBg: 'bg-amber-50 text-amber-600 border-amber-100',
+      bgColor: '#3a9ee3',
+      textColor: '#0a0909',
+      iconBg: 'bg-white/20 text-slate-900 border-white/30',
       borderHover: 'hover:border-amber-400',
     },
   ];
@@ -100,8 +124,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
     onNavigate(id);
   };
 
+  const formatSeconds = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
   return (
-    <div className="flex-1 flex flex-col p-4 overflow-y-auto bg-[#F1F5F9] text-slate-800">
+    <div className="flex-1 flex flex-col p-4 overflow-y-auto bg-[#F1F5F9] text-slate-800 relative">
       {/* Current Project Info Banner */}
       <div className="bg-white border border-slate-200/90 rounded-xl p-3 mb-3.5 flex items-center justify-between shadow-xs">
         <div className="flex items-center gap-3 overflow-hidden">
@@ -118,16 +149,27 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        <button
-          onClick={() => onNavigate('project_manage')}
-          className="text-xs bg-blue-50/60 hover:bg-blue-100 text-blue-600 border border-blue-200 hover:border-blue-300 px-3.5 py-1.5 rounded-lg font-semibold transition cursor-pointer shrink-0"
-        >
-          切换项目
-        </button>
+        <div className="flex items-center gap-2">
+          {onOpenStorageModal && (
+            <button
+              onClick={onOpenStorageModal}
+              title="外置存储目录与文件管理"
+              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition cursor-pointer"
+            >
+              <HardDrive className="w-4 h-4 text-blue-600" />
+            </button>
+          )}
+          <button
+            onClick={() => onNavigate('project_manage')}
+            className="text-xs bg-blue-50/60 hover:bg-blue-100 text-blue-600 border border-blue-200 hover:border-blue-300 px-3.5 py-1.5 rounded-lg font-semibold transition cursor-pointer shrink-0"
+          >
+            切换项目
+          </button>
+        </div>
       </div>
 
-      {/* Responsive Grid Menu */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 flex-1">
+      {/* Responsive Grid Menu (Compact 1/2 Area for Higher Concentration) */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">
         {menuItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -135,33 +177,38 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
               key={item.id}
               id={`btn-menu-${item.id}`}
               onClick={() => handleItemClick(item.id)}
-              className={`group bg-white hover:bg-slate-50/80 active:bg-slate-100 border border-slate-200 ${item.borderHover} rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all duration-150 active:scale-98 shadow-xs relative overflow-hidden cursor-pointer min-h-[130px]`}
+              style={{ backgroundColor: item.bgColor }}
+              className={`group hover:opacity-95 active:opacity-90 border border-black/10 ${item.borderHover} rounded-xl p-2 flex flex-col items-center justify-center text-center transition-all duration-150 active:scale-95 shadow-2xs relative overflow-hidden cursor-pointer min-h-[66px]`}
             >
               {/* Top Accent Color Bar */}
               <div
-                className={`absolute top-0 inset-x-0 h-1 ${item.topColor} transition`}
+                className={`absolute top-0 inset-x-0 h-0.5 ${item.topColor} transition`}
               />
 
-              {/* Icon Container */}
+              {/* Compact Icon Container */}
               <div
-                className={`w-12 h-12 rounded-xl flex items-center justify-center border ${item.iconBg} mb-2.5 shadow-2xs group-hover:scale-105 transition-transform`}
+                style={{ width: '32px', height: '32px' }}
+                className={`rounded-lg flex items-center justify-center border ${item.iconBg} mb-1 shadow-2xs group-hover:scale-105 transition-transform`}
               >
-                <Icon className="w-5 h-5" />
+                <Icon className="w-4 h-4" />
               </div>
 
               {/* Title */}
-              <span className="text-xs font-bold text-slate-900 group-hover:text-blue-600 tracking-tight">
+              <span
+                style={{ color: item.textColor }}
+                className="text-[11px] font-bold tracking-tight leading-tight"
+              >
                 {item.title}
               </span>
 
               {/* Description / Subtitle */}
-              <span className="text-[10px] text-slate-400 mt-1 line-clamp-1 font-medium">
+              <span className="text-[9px] text-slate-800/85 mt-0.5 line-clamp-1 font-medium scale-95">
                 {item.desc}
               </span>
 
-              {/* Badge */}
+              {/* Compact Badge */}
               {item.badge && (
-                <span className="mt-2 text-[10px] px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/80 font-sans font-medium">
+                <span className="mt-1 text-[8px] px-1.5 py-0.2 rounded-full bg-white/50 text-slate-900 border border-black/10 font-sans font-medium backdrop-blur-2xs line-clamp-1">
                   {item.badge}
                 </span>
               )}
@@ -169,6 +216,59 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
           );
         })}
       </div>
+
+      {/* ------------------------------------------------------------------------- */}
+      {/* Background Active Track Recording Indicator Banner (Requirement 4)        */}
+      {/* ------------------------------------------------------------------------- */}
+      {activeRecording.isRecording && (
+        <div className="mt-3 bg-rose-50 border-2 border-rose-300 rounded-2xl p-3 shadow-md flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <div
+            onClick={() => onNavigate('routes')}
+            className="flex items-center gap-3 cursor-pointer flex-1 min-w-0"
+          >
+            {/* Red Blinking Indicator Dot with Pulse Ring */}
+            <div className="relative flex items-center justify-center w-5 h-5 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600" />
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-rose-950 truncate">
+                  航迹记录中: {activeRecording.name}
+                </span>
+                <span className="text-[9px] bg-rose-200 text-rose-800 font-mono font-bold px-1.5 py-0.2 rounded">
+                  GPX
+                </span>
+              </div>
+              <div className="text-[11px] font-mono text-rose-800 flex items-center gap-3 mt-0.5">
+                <span>⏱️ {formatSeconds(activeRecording.elapsedSeconds)}</span>
+                <span>•</span>
+                <span>
+                  📍{' '}
+                  {activeRecording.distance > 1000
+                    ? `${(activeRecording.distance / 1000).toFixed(2)} km`
+                    : `${activeRecording.distance.toFixed(1)} m`}
+                </span>
+                <span>•</span>
+                <span>{activeRecording.points.length} 历元点</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Stop Button */}
+          <button
+            onClick={() => {
+              stopTrackRecording(true);
+            }}
+            title="结束并保存GPX航迹"
+            className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 shrink-0 transition cursor-pointer"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" />
+            <span>停止记录</span>
+          </button>
+        </div>
+      )}
 
       {/* Handheld Device Quick Coordinate & Accuracy Bar */}
       <div className="mt-3.5 bg-white border border-slate-200/90 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 font-mono shadow-xs">

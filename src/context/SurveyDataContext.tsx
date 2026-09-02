@@ -1,14 +1,26 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   SurveyPoint,
   SurveyRoute,
   SurveyTrack,
+  TrackPoint,
   EngineeringProject,
   SurveyLogRecord,
   UnitSettings,
 } from '../types';
-import { latLonToGauss } from '../utils/geodesy';
+import { latLonToGauss, haversineDistance } from '../utils/geodesy';
 import { soundService } from '../utils/sound';
+import { fileStorageService } from '../utils/fileStorageService';
+import { exportTrackToGPX, exportPointsToCSV, exportPointsToCASS } from '../utils/exportImport';
+
+export interface ActiveRecordingState {
+  isRecording: boolean;
+  name: string;
+  startTime: string;
+  points: TrackPoint[];
+  distance: number; // in meters
+  elapsedSeconds: number;
+}
 
 interface SurveyDataContextType {
   currentProject: EngineeringProject;
@@ -18,165 +30,157 @@ interface SurveyDataContextType {
   tracks: SurveyTrack[];
   surveyLogs: SurveyLogRecord[];
   unitSettings: UnitSettings;
+  activeRecording: ActiveRecordingState;
+  
+  // Point operations
   addPoint: (point: Omit<SurveyPoint, 'id' | 'createdAt'>) => SurveyPoint;
   updatePoint: (id: string, updates: Partial<SurveyPoint>) => void;
   deletePoint: (id: string) => void;
   deletePoints: (ids: string[]) => void;
   importPointsBatch: (newPoints: Partial<SurveyPoint>[]) => number;
+  getNextPointName: () => string;
+
+  // Route operations
   addRoute: (route: Omit<SurveyRoute, 'id' | 'createdAt'>) => SurveyRoute;
   deleteRoute: (id: string) => void;
+  getNextRouteName: () => string;
+
+  // Track operations & Background Recording
   addTrack: (track: Omit<SurveyTrack, 'id'>) => SurveyTrack;
   deleteTrack: (id: string) => void;
+  getNextTrackName: () => string;
+  startTrackRecording: (
+    customName?: string,
+    initialPoint?: { lat: number; lon: number; elevation?: number; speed?: number }
+  ) => void;
+  stopTrackRecording: (saveAsGPX?: boolean) => SurveyTrack | null;
+  appendTrackPoint: (lat: number, lon: number, elevation: number, speed?: number) => void;
+
+  // Project operations
   addProject: (project: Omit<EngineeringProject, 'id' | 'createTime' | 'pointCount'>) => EngineeringProject;
   deleteProject: (id: string) => boolean;
   switchProject: (id: string) => void;
   updateProject: (id: string, updates: Partial<EngineeringProject>) => void;
+  getNextProjectName: () => string;
+
+  // Survey log & Unit settings
   addSurveyLog: (log: Omit<SurveyLogRecord, 'id' | 'time'>) => void;
   clearSurveyLogs: () => void;
   updateUnitSettings: (settings: Partial<UnitSettings>) => void;
 }
 
-const defaultProject: EngineeringProject = {
-  id: 'proj_default_01',
-  name: '光谷科技园市政测绘工程',
-  operator: '测量工程师_张工',
-  coordSystem: 'CGCS2000',
-  centralMeridian: 114.0,
-  projectionType: 'Gauss3',
-  sevenParams: { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0, scale: 0 },
-  createTime: '2026-08-20 08:30:00',
-  pointCount: 6,
-  desc: '高精RTK工程放样与GIS地形图碎部采集项目',
-};
+// -----------------------------------------------------------------------------------
+// Time-based sequential naming helpers
+// Point: pointYYYY.MMDD_01
+// Track: trackYYYYMMDD_1
+// Project: projectYYYY.MMDD_01
+// Route: routeYYYYMMDD_1
+// -----------------------------------------------------------------------------------
 
-const initialProjects: EngineeringProject[] = [
-  defaultProject,
-  {
-    id: 'proj_02',
-    name: '三环线跨线桥桩基放样',
-    operator: '李工',
-    coordSystem: 'Beijing54',
+export function generateDateSlug(sep: string = ''): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}${sep}${mm}${dd}`;
+}
+
+export function generateTimePointName(existingPoints: SurveyPoint[]): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const prefix = `point${yyyy}.${mm}${dd}_`;
+
+  const todaysPoints = existingPoints.filter((p) => p.name.startsWith(prefix));
+  let maxSeq = 0;
+  todaysPoints.forEach((p) => {
+    const numPart = parseInt(p.name.replace(prefix, ''), 10);
+    if (!isNaN(numPart) && numPart > maxSeq) {
+      maxSeq = numPart;
+    }
+  });
+
+  const nextSeq = String(maxSeq + 1).padStart(2, '0');
+  return `${prefix}${nextSeq}`;
+}
+
+export function generateTimeTrackName(existingTracks: SurveyTrack[]): string {
+  const dateSlug = generateDateSlug('');
+  const prefix = `track${dateSlug}_`;
+
+  const todaysTracks = existingTracks.filter((t) => t.name.startsWith(prefix));
+  let maxSeq = 0;
+  todaysTracks.forEach((t) => {
+    const numPart = parseInt(t.name.replace(prefix, ''), 10);
+    if (!isNaN(numPart) && numPart > maxSeq) {
+      maxSeq = numPart;
+    }
+  });
+
+  return `${prefix}${maxSeq + 1}`;
+}
+
+export function generateTimeProjectName(existingProjects: EngineeringProject[]): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const prefix = `project${yyyy}.${mm}${dd}_`;
+
+  const todaysProjects = existingProjects.filter((p) => p.name.startsWith(prefix));
+  let maxSeq = 0;
+  todaysProjects.forEach((p) => {
+    const numPart = parseInt(p.name.replace(prefix, ''), 10);
+    if (!isNaN(numPart) && numPart > maxSeq) {
+      maxSeq = numPart;
+    }
+  });
+
+  const nextSeq = String(maxSeq + 1).padStart(2, '0');
+  return `${prefix}${nextSeq}`;
+}
+
+export function generateTimeRouteName(existingRoutes: SurveyRoute[]): string {
+  const dateSlug = generateDateSlug('');
+  const prefix = `route${dateSlug}_`;
+
+  const todaysRoutes = existingRoutes.filter((r) => r.name.startsWith(prefix));
+  let maxSeq = 0;
+  todaysRoutes.forEach((r) => {
+    const numPart = parseInt(r.name.replace(prefix, ''), 10);
+    if (!isNaN(numPart) && numPart > maxSeq) {
+      maxSeq = numPart;
+    }
+  });
+
+  return `${prefix}${maxSeq + 1}`;
+}
+
+function createDefaultProject(): EngineeringProject {
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate()
+  ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+    2,
+    '0'
+  )}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+  const projName = generateTimeProjectName([]);
+
+  return {
+    id: `proj_${Date.now()}`,
+    name: projName,
+    operator: '测绘工程师',
+    coordSystem: 'CGCS2000',
     centralMeridian: 114.0,
     projectionType: 'Gauss3',
-    sevenParams: { dx: -12.4, dy: 8.5, dz: 14.2, rx: 0.12, ry: -0.08, rz: 0.45, scale: 1.2 },
-    createTime: '2026-08-22 14:10:00',
-    pointCount: 4,
-    desc: '高架桥主墩控制网与桩位偏距放样',
-  },
-];
-
-// Initial realistic points around 30.62402372, 114.26778222 (Wuhan Optics Valley Area)
-const baseLat = 30.62402372;
-const baseLon = 114.26778222;
-
-const initialPoints: SurveyPoint[] = [
-  {
-    id: 'pt_1',
-    name: 'point 1',
-    code: 'CP01',
-    lat: baseLat + 0.00045,
-    lon: baseLon + 0.00032,
-    elevation: 24.12,
-    x: latLonToGauss(baseLat + 0.00045, baseLon + 0.00032, 114.0, 'CGCS2000').x,
-    y: latLonToGauss(baseLat + 0.00045, baseLon + 0.00032, 114.0, 'CGCS2000').y,
-    coordSystem: 'CGCS2000',
-    desc: '园区主入口高等级导线控制点',
-    color: '#f97316',
-    hrms: 0.008,
-    vrms: 0.014,
-    solutionType: 'FIXED',
-    satCount: 28,
-    createdAt: '2026-08-29 09:12:44',
-    projectId: 'proj_default_01',
-  },
-  {
-    id: 'pt_2',
-    name: 'point 2',
-    code: 'ROAD_CL',
-    lat: baseLat + 0.0012,
-    lon: baseLon - 0.0008,
-    elevation: 23.85,
-    x: latLonToGauss(baseLat + 0.0012, baseLon - 0.0008, 114.0, 'CGCS2000').x,
-    y: latLonToGauss(baseLat + 0.0012, baseLon - 0.0008, 114.0, 'CGCS2000').y,
-    coordSystem: 'CGCS2000',
-    desc: '规划道路K0+080中心桩设计放样点',
-    color: '#3b82f6',
-    hrms: 0.007,
-    vrms: 0.012,
-    solutionType: 'FIXED',
-    satCount: 30,
-    createdAt: '2026-08-29 09:25:10',
-    projectId: 'proj_default_01',
-  },
-  {
-    id: 'pt_3',
-    name: 'point 3',
-    code: 'BM02',
-    lat: baseLat - 0.0009,
-    lon: baseLon + 0.0015,
-    elevation: 25.6,
-    x: latLonToGauss(baseLat - 0.0009, baseLon + 0.0015, 114.0, 'CGCS2000').x,
-    y: latLonToGauss(baseLat - 0.0009, baseLon + 0.0015, 114.0, 'CGCS2000').y,
-    coordSystem: 'CGCS2000',
-    desc: '国家二等水准基点引测标志',
-    color: '#10b981',
-    hrms: 0.006,
-    vrms: 0.009,
-    solutionType: 'FIXED',
-    satCount: 31,
-    createdAt: '2026-08-29 09:40:02',
-    projectId: 'proj_default_01',
-  },
-  {
-    id: 'pt_4',
-    name: 'point 4',
-    code: 'BLDG_CORNER',
-    lat: baseLat - 0.0006,
-    lon: baseLon - 0.0011,
-    elevation: 23.4,
-    x: latLonToGauss(baseLat - 0.0006, baseLon - 0.0011, 114.0, 'CGCS2000').x,
-    y: latLonToGauss(baseLat - 0.0006, baseLon - 0.0011, 114.0, 'CGCS2000').y,
-    coordSystem: 'CGCS2000',
-    desc: '1#厂房西南角外墙轴线交点',
-    color: '#8b5cf6',
-    hrms: 0.009,
-    vrms: 0.016,
-    solutionType: 'FIXED',
-    satCount: 26,
-    createdAt: '2026-08-29 10:05:30',
-    projectId: 'proj_default_01',
-  },
-];
-
-const initialRoutes: SurveyRoute[] = [
-  {
-    id: 'route_1',
-    name: '主干道中线放样轴线',
-    pointIds: ['pt_1', 'pt_2', 'pt_3'],
-    totalDistance: 342.8,
-    createdAt: '2026-08-29 10:15:00',
-    desc: '自入口控制点至道路中心桩里程',
-    color: '#f97316',
-  },
-];
-
-const initialTracks: SurveyTrack[] = [
-  {
-    id: 'track_1',
-    name: '20260829_勘测巡线航迹',
-    points: [
-      { lat: baseLat, lon: baseLon, elevation: 23.4, time: '2026-08-29 09:00:00', speed: 1.2 },
-      { lat: baseLat + 0.0003, lon: baseLon + 0.0002, elevation: 23.8, time: '2026-08-29 09:05:00', speed: 1.4 },
-      { lat: baseLat + 0.0008, lon: baseLon - 0.0004, elevation: 24.1, time: '2026-08-29 09:12:00', speed: 1.1 },
-      { lat: baseLat + 0.0012, lon: baseLon - 0.0008, elevation: 23.85, time: '2026-08-29 09:20:00', speed: 0.9 },
-    ],
-    distance: 428.5,
-    duration: 1200,
-    startTime: '2026-08-29 09:00:00',
-    endTime: '2026-08-29 09:20:00',
-    color: '#06b6d4',
-  },
-];
+    sevenParams: { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0, scale: 0 },
+    createTime: dateStr,
+    pointCount: 0,
+    desc: '高精RTK工程测量项目',
+  };
+}
 
 const defaultUnitSettings: UnitSettings = {
   distanceUnit: 'm',
@@ -191,33 +195,77 @@ const defaultUnitSettings: UnitSettings = {
 const SurveyDataContext = createContext<SurveyDataContextType | undefined>(undefined);
 
 export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Projects (Default to new time-based project if none)
   const [projects, setProjects] = useState<EngineeringProject[]>(() => {
     const saved = localStorage.getItem('rtk_projects');
-    return saved ? JSON.parse(saved) : initialProjects;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {
+        // ignore
+      }
+    }
+    return [createDefaultProject()];
   });
 
   const [currentProject, setCurrentProject] = useState<EngineeringProject>(() => {
     const savedId = localStorage.getItem('rtk_current_proj_id');
     const list = localStorage.getItem('rtk_projects');
-    const parsedList: EngineeringProject[] = list ? JSON.parse(list) : initialProjects;
-    return parsedList.find((p) => p.id === savedId) || parsedList[0] || defaultProject;
+    let parsedList: EngineeringProject[] = [];
+    if (list) {
+      try {
+        parsedList = JSON.parse(list);
+      } catch (e) {
+        // ignore
+      }
+    }
+    if (parsedList.length === 0) {
+      parsedList = projects;
+    }
+    return parsedList.find((p) => p.id === savedId) || parsedList[0] || createDefaultProject();
   });
 
+  // Points (Empty clean slate by default, no mock data)
   const [points, setPoints] = useState<SurveyPoint[]>(() => {
     const saved = localStorage.getItem('rtk_points');
-    return saved ? JSON.parse(saved) : initialPoints;
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
   });
 
+  // Routes
   const [routes, setRoutes] = useState<SurveyRoute[]>(() => {
     const saved = localStorage.getItem('rtk_routes');
-    return saved ? JSON.parse(saved) : initialRoutes;
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
   });
 
+  // Tracks
   const [tracks, setTracks] = useState<SurveyTrack[]>(() => {
     const saved = localStorage.getItem('rtk_tracks');
-    return saved ? JSON.parse(saved) : initialTracks;
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
   });
 
+  // Survey logs
   const [surveyLogs, setSurveyLogs] = useState<SurveyLogRecord[]>(() => {
     const saved = localStorage.getItem('rtk_survey_logs');
     return saved ? JSON.parse(saved) : [];
@@ -228,14 +276,76 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return saved ? JSON.parse(saved) : defaultUnitSettings;
   });
 
-  // Sync soundService enabled status with unitSettings
+  // --- Background Non-stop Track Recording Engine ---
+  const [activeRecording, setActiveRecording] = useState<ActiveRecordingState>(() => {
+    const saved = localStorage.getItem('rtk_active_recording');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // ignore
+      }
+    }
+    return {
+      isRecording: false,
+      name: '',
+      startTime: '',
+      points: [],
+      distance: 0,
+      elapsedSeconds: 0,
+    };
+  });
+
+  const wakeLockRef = useRef<any>(null);
+
+  // Screen Wake Lock API for background tracking
+  useEffect(() => {
+    if (activeRecording.isRecording) {
+      if ('wakeLock' in navigator && !wakeLockRef.current) {
+        (navigator as any).wakeLock?.request?.('screen').then((lock: any) => {
+          wakeLockRef.current = lock;
+        }).catch(() => {
+          // ignore wake lock denial
+        });
+      }
+    } else {
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release?.().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    }
+  }, [activeRecording.isRecording]);
+
+  // Elapsed timer when recording
+  useEffect(() => {
+    if (!activeRecording.isRecording) return;
+    const timer = setInterval(() => {
+      setActiveRecording((prev) => {
+        if (!prev.isRecording) return prev;
+        return {
+          ...prev,
+          elapsedSeconds: prev.elapsedSeconds + 1,
+        };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [activeRecording.isRecording]);
+
+  // Save active recording state to localStorage
+  useEffect(() => {
+    localStorage.setItem('rtk_active_recording', JSON.stringify(activeRecording));
+  }, [activeRecording]);
+
+  // Sync soundService
   useEffect(() => {
     soundService.setEnabled(unitSettings.audioBeep);
   }, [unitSettings.audioBeep]);
 
-  // Persist storage
+  // Persist storage & mirror to /storage/emulated/0/com.rtkprogect.files/
   useEffect(() => {
     localStorage.setItem('rtk_projects', JSON.stringify(projects));
+    // Auto-save projects backup
+    fileStorageService.saveFile('project', 'projects_backup.json', JSON.stringify(projects, null, 2)).catch(() => {});
   }, [projects]);
 
   useEffect(() => {
@@ -244,7 +354,15 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     localStorage.setItem('rtk_points', JSON.stringify(points));
-  }, [points]);
+    // Persist current project point library in /storage/emulated/0/com.rtkprogect.files/point/
+    if (points.length > 0) {
+      fileStorageService.saveFile('point', `${currentProject.name}_points.json`, JSON.stringify(points, null, 2), 'application/json').catch(() => {});
+      const summaryTxt = points.map((p, idx) => 
+        `${idx + 1},${p.name},${p.x.toFixed(4)},${p.y.toFixed(4)},${p.elevation.toFixed(4)},${p.code || 'GPS'},${p.createdAt}`
+      ).join('\n');
+      fileStorageService.saveFile('point', `${currentProject.name}_point.txt`, summaryTxt, 'text/plain;charset=utf-8').catch(() => {});
+    }
+  }, [points, currentProject.name]);
 
   useEffect(() => {
     localStorage.setItem('rtk_routes', JSON.stringify(routes));
@@ -262,6 +380,24 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     localStorage.setItem('rtk_unit_settings', JSON.stringify(unitSettings));
   }, [unitSettings]);
 
+  // Name Generator Helpers
+  const getNextPointName = useCallback(() => {
+    return generateTimePointName(points);
+  }, [points]);
+
+  const getNextTrackName = useCallback(() => {
+    return generateTimeTrackName(tracks);
+  }, [tracks]);
+
+  const getNextProjectName = useCallback(() => {
+    return generateTimeProjectName(projects);
+  }, [projects]);
+
+  const getNextRouteName = useCallback(() => {
+    return generateTimeRouteName(routes);
+  }, [routes]);
+
+  // Add Point with auto time formatting
   const addPoint = useCallback(
     (pointData: Omit<SurveyPoint, 'id' | 'createdAt'>): SurveyPoint => {
       const now = new Date();
@@ -272,8 +408,11 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         '0'
       )}:${String(now.getSeconds()).padStart(2, '0')}`;
 
+      const pointName = pointData.name?.trim() ? pointData.name : generateTimePointName(points);
+
       const newPoint: SurveyPoint = {
         ...pointData,
+        name: pointName,
         id: `pt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         createdAt: dateStr,
         projectId: pointData.projectId || currentProject.id,
@@ -281,6 +420,26 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       setPoints((prev) => [newPoint, ...prev]);
       soundService.playPointSaved();
+
+      // Immediately persist point file to /storage/emulated/0/com.rtkprogect.files/point/
+      const pointRecordTxt = [
+        `点名: ${newPoint.name}`,
+        `编码: ${newPoint.code || 'GPS'}`,
+        `北坐标(X): ${newPoint.x.toFixed(4)}`,
+        `东坐标(Y): ${newPoint.y.toFixed(4)}`,
+        `高程(H): ${newPoint.elevation.toFixed(4)}`,
+        `纬度(Lat): ${newPoint.lat.toFixed(8)}`,
+        `经度(Lon): ${newPoint.lon.toFixed(8)}`,
+        `平面精度(HRMS): ${(newPoint.hrms || 0.008).toFixed(4)}m`,
+        `高程精度(VRMS): ${(newPoint.vrms || 0.015).toFixed(4)}m`,
+        `解状态: ${newPoint.solutionType || 'FIXED'}`,
+        `天线高: ${(newPoint.antennaHeight || 2.0).toFixed(3)}m`,
+        `采集时间: ${dateStr}`,
+        newPoint.desc ? `说明: ${newPoint.desc}` : '',
+      ].filter(Boolean).join('\n');
+
+      fileStorageService.saveFile('point', `${newPoint.name}.txt`, pointRecordTxt, 'text/plain;charset=utf-8').catch(() => {});
+      fileStorageService.saveFile('point', `${newPoint.name}.json`, JSON.stringify(newPoint, null, 2), 'application/json').catch(() => {});
 
       // Log measurement record
       setSurveyLogs((prev) => [
@@ -307,7 +466,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       return newPoint;
     },
-    [currentProject.id]
+    [currentProject.id, points]
   );
 
   const updatePoint = useCallback((id: string, updates: Partial<SurveyPoint>) => {
@@ -336,13 +495,12 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       )}:${String(now.getSeconds()).padStart(2, '0')}`;
 
       newPoints.forEach((p, idx) => {
-        let lat = p.lat || baseLat;
-        let lon = p.lon || baseLon;
+        let lat = p.lat || 30.62402372;
+        let lon = p.lon || 114.26778222;
         let x = p.x || 0;
         let y = p.y || 0;
 
         if (x !== 0 && y !== 0 && (lat === 0 || isNaN(lat))) {
-          // calculate lat/lon from Gauss
           const gaussCalc = latLonToGauss(lat, lon, currentProject.centralMeridian, currentProject.coordSystem);
           x = gaussCalc.x;
           y = gaussCalc.y;
@@ -354,7 +512,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
         formattedPoints.push({
           id: `pt_imp_${Date.now()}_${idx}`,
-          name: p.name || `Import_${idx + 1}`,
+          name: p.name || `PT_${idx + 1}`,
           code: p.code || 'IMP',
           lat,
           lon,
@@ -391,6 +549,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       const newRoute: SurveyRoute = {
         ...routeData,
+        name: routeData.name?.trim() ? routeData.name : generateTimeRouteName(routes),
         id: `route_${Date.now()}`,
         createdAt: dateStr,
       };
@@ -398,7 +557,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setRoutes((prev) => [newRoute, ...prev]);
       return newRoute;
     },
-    []
+    [routes]
   );
 
   const deleteRoute = useCallback((id: string) => {
@@ -411,12 +570,156 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       id: `track_${Date.now()}`,
     };
     setTracks((prev) => [newTrack, ...prev]);
+
+    // Auto-save GPX and track data to /storage/emulated/0/com.rtkprogect.files/track/
+    const gpx = exportTrackToGPX(newTrack);
+    fileStorageService.saveFile('track', `${newTrack.name}.gpx`, gpx, 'application/gpx+xml').catch(() => {});
+    fileStorageService.saveFile('track', `${newTrack.name}.json`, JSON.stringify(newTrack, null, 2), 'application/json').catch(() => {});
+
     return newTrack;
   }, []);
 
   const deleteTrack = useCallback((id: string) => {
     setTracks((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  // --- Background Track Recording Functions ---
+  const startTrackRecording = useCallback(
+    (
+      customName?: string,
+      initialPoint?: { lat: number; lon: number; elevation?: number; speed?: number }
+    ) => {
+      soundService.playClick();
+      const trackName = customName?.trim() ? customName.trim() : generateTimeTrackName(tracks);
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+        now.getDate()
+      ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+        2,
+        '0'
+      )}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+        2,
+        '0'
+      )}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+      // Automatically record current coordinate as the very first point
+      const initialPoints: TrackPoint[] = [];
+      if (initialPoint && typeof initialPoint.lat === 'number' && typeof initialPoint.lon === 'number') {
+        initialPoints.push({
+          lat: initialPoint.lat,
+          lon: initialPoint.lon,
+          elevation: initialPoint.elevation ?? 0,
+          time: timeStr,
+          speed: initialPoint.speed ?? 0,
+        });
+      }
+
+      setActiveRecording({
+        isRecording: true,
+        name: trackName,
+        startTime: dateStr,
+        points: initialPoints,
+        distance: 0,
+        elapsedSeconds: 0,
+      });
+    },
+    [tracks]
+  );
+
+  const appendTrackPoint = useCallback((lat: number, lon: number, elevation: number, speed: number = 0) => {
+    setActiveRecording((prev) => {
+      if (!prev.isRecording) return prev;
+
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+        2,
+        '0'
+      )}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+      const newPoint: TrackPoint = {
+        lat,
+        lon,
+        elevation,
+        time: timeStr,
+        speed: speed || 0,
+      };
+
+      if (prev.points.length === 0) {
+        return {
+          ...prev,
+          points: [newPoint],
+          distance: 0,
+        };
+      }
+
+      const last = prev.points[prev.points.length - 1];
+      const addedDist = haversineDistance(last.lat, last.lon, lat, lon);
+
+      // Record point if moved slightly or after periodic sampling
+      return {
+        ...prev,
+        points: [...prev.points, newPoint],
+        distance: prev.distance + (addedDist >= 0.05 ? addedDist : 0),
+      };
+    });
+  }, []);
+
+  const stopTrackRecording = useCallback((saveAsGPX: boolean = true): SurveyTrack | null => {
+    soundService.playSuccess();
+
+    if (!activeRecording.isRecording || activeRecording.points.length === 0) {
+      setActiveRecording({
+        isRecording: false,
+        name: '',
+        startTime: '',
+        points: [],
+        distance: 0,
+        elapsedSeconds: 0,
+      });
+      return null;
+    }
+
+    const now = new Date();
+    const endTimeStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate()
+    ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+      2,
+      '0'
+    )}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+    const newTrack: SurveyTrack = {
+      id: `track_${Date.now()}`,
+      name: activeRecording.name || generateTimeTrackName(tracks),
+      points: activeRecording.points,
+      distance: activeRecording.distance,
+      duration: activeRecording.elapsedSeconds,
+      startTime: activeRecording.startTime,
+      endTime: endTimeStr,
+      color: '#06b6d4',
+    };
+
+    setTracks((prev) => [newTrack, ...prev]);
+
+    // Save as standard GPX format & JSON to /storage/emulated/0/com.rtkprogect.files/track/
+    if (saveAsGPX) {
+      const gpxContent = exportTrackToGPX(newTrack);
+      fileStorageService.saveFile('track', `${newTrack.name}.gpx`, gpxContent, 'application/gpx+xml').catch(() => {});
+      fileStorageService.saveFile('track', `${newTrack.name}.json`, JSON.stringify(newTrack, null, 2), 'application/json').catch(() => {});
+    }
+
+    setActiveRecording({
+      isRecording: false,
+      name: '',
+      startTime: '',
+      points: [],
+      distance: 0,
+      elapsedSeconds: 0,
+    });
+
+    return newTrack;
+  }, [activeRecording, tracks]);
 
   const addProject = useCallback(
     (projData: Omit<EngineeringProject, 'id' | 'createTime' | 'pointCount'>): EngineeringProject => {
@@ -428,8 +731,11 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         '0'
       )}:${String(now.getSeconds()).padStart(2, '0')}`;
 
+      const projName = projData.name?.trim() ? projData.name : generateTimeProjectName(projects);
+
       const newProject: EngineeringProject = {
         ...projData,
+        name: projName,
         id: `proj_${Date.now()}`,
         createTime: dateStr,
         pointCount: 0,
@@ -437,9 +743,13 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       setProjects((prev) => [newProject, ...prev]);
       setCurrentProject(newProject);
+
+      // Save project metadata file to project/ folder
+      fileStorageService.saveFile('project', `${newProject.name}_config.json`, JSON.stringify(newProject, null, 2)).catch(() => {});
+
       return newProject;
     },
-    []
+    [projects]
   );
 
   const deleteProject = useCallback(
@@ -477,7 +787,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const addSurveyLog = useCallback((logData: Omit<SurveyLogRecord, 'id' | 'time'>) => {
     const now = new Date();
     const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-      now.getMonth() + 1
+      now.getDate()
     ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
       2,
       '0'
@@ -509,19 +819,27 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         tracks,
         surveyLogs,
         unitSettings,
+        activeRecording,
         addPoint,
         updatePoint,
         deletePoint,
         deletePoints,
         importPointsBatch,
+        getNextPointName,
         addRoute,
         deleteRoute,
+        getNextRouteName,
         addTrack,
         deleteTrack,
+        getNextTrackName,
+        startTrackRecording,
+        stopTrackRecording,
+        appendTrackPoint,
         addProject,
         deleteProject,
         switchProject,
         updateProject,
+        getNextProjectName,
         addSurveyLog,
         clearSurveyLogs,
         updateUnitSettings,

@@ -41,6 +41,155 @@ export function ddToDMS(dd: number): { deg: number; min: number; sec: number; st
   return { deg: sign * deg, min, sec: roundedSec, str };
 }
 
+// -----------------------------------------------------------------------------------
+// WGS-84 <-> GCJ-02 (高德/腾讯火星坐标) <-> BD-09 (百度坐标) 高精双向纠偏算法
+// -----------------------------------------------------------------------------------
+const X_PI = (Math.PI * 3000.0) / 180.0;
+const A = 6378245.0; // 椭球体长半轴
+const EE = 0.00669342162296594323; // 椭球第一偏心率平方
+
+function transformLat(x: number, y: number): number {
+  let ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  ret += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0;
+  ret += ((20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin((y / 3.0) * Math.PI)) * 2.0) / 3.0;
+  ret += ((160.0 * Math.sin((y / 12.0) * Math.PI) + 320 * Math.sin((y * Math.PI) / 30.0)) * 2.0) / 3.0;
+  return ret;
+}
+
+function transformLon(x: number, y: number): number {
+  let ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  ret += ((20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0) / 3.0;
+  ret += ((20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin((x / 3.0) * Math.PI)) * 2.0) / 3.0;
+  ret += ((150.0 * Math.sin((x / 12.0) * Math.PI) + 300.0 * Math.sin((x / 30.0) * Math.PI)) * 2.0) / 3.0;
+  return ret;
+}
+
+export function outOfChina(lat: number, lon: number): boolean {
+  if (lon < 72.004 || lon > 137.8347) return true;
+  if (lat < 0.8293 || lat > 55.8271) return true;
+  return false;
+}
+
+/**
+ * WGS-84 (RTK/GPS原始坐标) 转 GCJ-02 (高德地图/火星坐标)
+ */
+export function wgs84ToGcj02(lat: number, lon: number): { lat: number; lon: number } {
+  if (outOfChina(lat, lon)) {
+    return { lat, lon };
+  }
+  let dLat = transformLat(lon - 105.0, lat - 35.0);
+  let dLon = transformLon(lon - 105.0, lat - 35.0);
+  const radLat = (lat / 180.0) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / (((A * (1 - EE)) / (magic * sqrtMagic)) * Math.PI);
+  dLon = (dLon * 180.0) / ((A / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return { lat: lat + dLat, lon: lon + dLon };
+}
+
+/**
+ * GCJ-02 (高德地图) 转 WGS-84 (RTK真实坐标)
+ */
+export function gcj02ToWgs84(lat: number, lon: number): { lat: number; lon: number } {
+  if (outOfChina(lat, lon)) {
+    return { lat, lon };
+  }
+  let dLat = transformLat(lon - 105.0, lat - 35.0);
+  let dLon = transformLon(lon - 105.0, lat - 35.0);
+  const radLat = (lat / 180.0) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / (((A * (1 - EE)) / (magic * sqrtMagic)) * Math.PI);
+  dLon = (dLon * 180.0) / ((A / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  const mgLat = lat + dLat;
+  const mgLon = lon + dLon;
+  return { lat: lat * 2 - mgLat, lon: lon * 2 - mgLon };
+}
+
+/**
+ * GCJ-02 转 BD-09 (百度地图)
+ */
+export function gcj02ToBd09(lat: number, lon: number): { lat: number; lon: number } {
+  const z = Math.sqrt(lon * lon + lat * lat) + 0.00002 * Math.sin(lat * X_PI);
+  const theta = Math.atan2(lat, lon) + 0.000003 * Math.cos(lon * X_PI);
+  const bdLon = z * Math.cos(theta) + 0.0065;
+  const bdLat = z * Math.sin(theta) + 0.006;
+  return { lat: bdLat, lon: bdLon };
+}
+
+/**
+ * BD-09 转 GCJ-02
+ */
+export function bd09ToGcj02(lat: number, lon: number): { lat: number; lon: number } {
+  const x = lon - 0.0065;
+  const y = lat - 0.006;
+  const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * X_PI);
+  const theta = Math.atan2(y, x) - 0.000003 * Math.cos(x * X_PI);
+  const gcjLon = z * Math.cos(theta);
+  const gcjLat = z * Math.sin(theta);
+  return { lat: gcjLat, lon: gcjLon };
+}
+
+/**
+ * WGS-84 直接转 BD-09 (百度地图)
+ */
+export function wgs84ToBd09(lat: number, lon: number): { lat: number; lon: number } {
+  const gcj = wgs84ToGcj02(lat, lon);
+  return gcj02ToBd09(gcj.lat, gcj.lon);
+}
+
+/**
+ * BD-09 直接转 WGS-84 (RTK真实坐标)
+ */
+export function bd09ToWgs84(lat: number, lon: number): { lat: number; lon: number } {
+  const gcj = bd09ToGcj02(lat, lon);
+  return gcj02ToWgs84(gcj.lat, gcj.lon);
+}
+
+/**
+ * Universal projection helper from WGS-84 to any Map Layer (Baidu / Gaode / standard WGS84)
+ */
+export function transformWgs84ToLayer(lat: number, lon: number, layerType: string): { lat: number; lon: number } {
+  if (layerType === 'gaode_street' || layerType === 'gaode_satellite') {
+    return wgs84ToGcj02(lat, lon);
+  }
+  if (layerType === 'baidu_street' || layerType === 'baidu_satellite') {
+    return wgs84ToBd09(lat, lon);
+  }
+  return { lat, lon };
+}
+
+/**
+ * Universal inverse projection helper from clicked Map Layer back to standard WGS-84
+ */
+export function transformLayerToWgs84(lat: number, lon: number, layerType: string): { lat: number; lon: number } {
+  if (layerType === 'gaode_street' || layerType === 'gaode_satellite') {
+    return gcj02ToWgs84(lat, lon);
+  }
+  if (layerType === 'baidu_street' || layerType === 'baidu_satellite') {
+    return bd09ToWgs84(lat, lon);
+  }
+  return { lat, lon };
+}
+
+/**
+ * Calculate course heading between two GPS locations (in degrees 0-360)
+ */
+export function calculateGpsCourse(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const rLat1 = (lat1 * Math.PI) / 180;
+  const rLat2 = (lat2 * Math.PI) / 180;
+
+  const y = Math.sin(dLon) * Math.cos(rLat2);
+  const x = Math.cos(rLat1) * Math.sin(rLat2) - Math.sin(rLat1) * Math.cos(rLat2) * Math.cos(dLon);
+
+  let course = (Math.atan2(y, x) * 180) / Math.PI;
+  if (course < 0) course += 360;
+  return Math.round(course * 10) / 10;
+}
+
 /**
  * Parses DMS numbers into decimal degrees
  */

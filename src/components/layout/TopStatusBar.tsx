@@ -4,7 +4,10 @@ import {
   Radio,
   Satellite,
   RotateCcw,
+  Maximize,
+  Minimize,
 } from 'lucide-react';
+import { soundService } from '../../utils/sound';
 
 interface TopStatusBarProps {
   title?: string;
@@ -23,6 +26,28 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
 }) => {
   const { rtkState, setSolution, toggleScreenRotation } = useRTK();
   const [timeStr, setTimeStr] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = () => {
+    soundService.playClick();
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch((err) => {
+        console.warn('Fullscreen request denied or not supported:', err);
+      });
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  };
 
   const getScreenTitle = (screen?: string) => {
     switch (screen) {
@@ -135,16 +160,32 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
           <button
             onClick={onOpenNtrip}
             id="btn-top-gps-mode-badge"
-            title="点击切换定位源与CORS差分设定（当前支持 >2Hz 物理高频刷新）"
+            title="点击切换定位源与CORS差分设定（真机GPS / IP网络免权限 / 外置蓝牙RTK）"
             className={`px-2 py-0.5 rounded text-[11px] font-bold border transition cursor-pointer flex items-center gap-1 ${
               rtkState.mode === 'real_gps'
+                ? rtkState.realGpsStatus === 'denied'
+                  ? 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100 animate-pulse'
+                  : rtkState.realGpsStatus === 'locating'
+                  ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                : rtkState.mode === 'ip_location'
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                : rtkState.mode === 'bluetooth_gnss'
+                ? 'bg-indigo-50 text-indigo-800 border-indigo-300 hover:bg-indigo-100'
+                : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
             }`}
           >
             <span>
               {rtkState.mode === 'real_gps'
-                ? `🛰️ 真机 ${(rtkState.realGpsFrequencyHz || 4.0).toFixed(1)}Hz`
+                ? rtkState.realGpsStatus === 'denied'
+                  ? '⚠️ 定位需授权'
+                  : rtkState.realGpsStatus === 'locating'
+                  ? '🛰️ 搜星中...'
+                  : `🛰️ 真机 ${(rtkState.realGpsFrequencyHz || 4.0).toFixed(1)}Hz`
+                : rtkState.mode === 'ip_location'
+                ? '🌐 网络基站'
+                : rtkState.mode === 'bluetooth_gnss'
+                ? '📡 蓝牙RTK'
                 : '🕹️ 仿真'}
             </span>
           </button>
@@ -157,6 +198,20 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
             className={`px-2 py-0.5 rounded text-xs font-bold tracking-wider cursor-pointer border ${badge.border} ${badge.color} transition active:scale-95 shadow-xs`}
           >
             ● {badge.label}
+          </button>
+
+          {/* Fullscreen toggle for field survey */}
+          <button
+            onClick={toggleFullscreen}
+            id="btn-toggle-fullscreen"
+            title={isFullscreen ? '退出全屏' : '全屏作业模式 (沉浸式)'}
+            className={`p-1.5 rounded-md border transition cursor-pointer ${
+              isFullscreen
+                ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
           </button>
 
           {/* Quick Rotate Screen toggle */}

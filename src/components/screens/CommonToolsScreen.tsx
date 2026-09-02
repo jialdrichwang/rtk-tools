@@ -188,8 +188,8 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
         </button>
       </div>
 
-      {/* Grid of Tools */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      {/* Grid of Tools (Compact 1/2 Area) */}
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
         {filteredTools.map((t) => {
           const Icon = t.icon;
           return (
@@ -200,22 +200,22 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
                 soundService.playClick();
                 t.action();
               }}
-              className="bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-200 hover:border-blue-400 rounded-2xl p-3.5 flex flex-col items-center justify-center text-center transition active:scale-95 shadow-xs group cursor-pointer relative"
+              className="bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-200 hover:border-blue-400 rounded-xl p-2 flex flex-col items-center justify-center text-center transition active:scale-95 shadow-2xs group cursor-pointer relative min-h-[68px]"
             >
               <div
-                className={`w-12 h-12 rounded-xl flex items-center justify-center border ${t.color} mb-2 group-hover:scale-105 transition-transform shadow-2xs`}
+                className={`w-8 h-8 rounded-lg flex items-center justify-center border ${t.color} mb-1 group-hover:scale-105 transition-transform shadow-2xs`}
               >
-                <Icon className="w-6 h-6" />
+                <Icon className="w-4 h-4" />
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-slate-900 group-hover:text-blue-600">
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] font-bold text-slate-900 group-hover:text-blue-600 leading-tight">
                   {t.title}
                 </span>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">
+              <span className="text-[9px] text-slate-500 mt-0.5 line-clamp-1 scale-95">
                 {t.desc}
               </span>
-              <span className="mt-2 text-[9px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium border border-slate-200/80">
+              <span className="mt-1 text-[8px] px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-600 font-medium border border-slate-200/80 line-clamp-1">
                 {t.badge}
               </span>
             </button>

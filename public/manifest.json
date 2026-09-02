@@ -1,0 +1,17 @@
+{
+  "name": "RTK 测量工具箱",
+  "short_name": "RTK测量",
+  "description": "专业级手持GNSS/RTK工程测量与GIS测绘工具箱系统",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

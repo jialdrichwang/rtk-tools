@@ -1,0 +1,13 @@
+{
+  "appId": "com.rtk.surveyapp",
+  "appName": "RTK 测量工具箱",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500
+    }
+  }
+}

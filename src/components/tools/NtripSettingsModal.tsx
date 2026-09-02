@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useRTK } from '../../context/RTKContext';
-import { Radio, Check, X, ShieldCheck, RefreshCw, Smartphone } from 'lucide-react';
+import { Radio, Check, X, ShieldCheck, RefreshCw, Smartphone, Wifi, Bluetooth, ExternalLink, Sliders } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 
 interface NtripSettingsModalProps {
@@ -18,6 +18,10 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
     connectNtrip,
     disconnectNtrip,
     setTargetSamplingHz,
+    fetchRealGPSPosition,
+    fetchIpLocationPosition,
+    connectBluetoothGNSS,
+    openStandaloneWindow,
   } = useRTK();
 
   const [ip, setIp] = useState(ntripConfig.ip);
@@ -44,7 +48,7 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 z-50 select-none">
-      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -61,15 +65,25 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
 
         <div className="p-4 space-y-3.5 overflow-y-auto">
           {/* Position Source Mode Selector */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2.5">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-800 block">定位数据源 (Positioning Source)</label>
               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                 rtkState.mode === 'real_gps'
+                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                  : rtkState.mode === 'ip_location'
                   ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : rtkState.mode === 'bluetooth_gnss'
+                  ? 'bg-indigo-100 text-indigo-800 border border-indigo-300'
                   : 'bg-amber-100 text-amber-800 border border-amber-300'
               }`}>
-                {rtkState.mode === 'real_gps' ? '机内真机GNSS传感器' : '高精仿真 (可点击地图取点)'}
+                {rtkState.mode === 'real_gps'
+                  ? '真机GPS传感器'
+                  : rtkState.mode === 'ip_location'
+                  ? '免权限 IP 网络定位'
+                  : rtkState.mode === 'bluetooth_gnss'
+                  ? '外置蓝牙 RTK 接收机'
+                  : '高精仿真 (地图自由取点)'}
               </span>
             </div>
             
@@ -80,13 +94,32 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                   soundService.playClick();
                   toggleGPSMode('simulated');
                 }}
-                className={`py-2 px-3 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`py-2 px-2.5 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                   rtkState.mode === 'simulated'
                     ? 'bg-amber-600 border-amber-600 text-white shadow-xs'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
                 }`}
               >
+                <Sliders className="w-3.5 h-3.5" />
                 <span>高精仿真接收机</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundService.playClick();
+                  toggleGPSMode('ip_location');
+                }}
+                className={`py-2 px-2.5 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  rtkState.mode === 'ip_location'
+                    ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Wifi className="w-3.5 h-3.5" />
+                <span className="flex items-center gap-1">
+                  <span>免权限 IP 定位</span>
+                </span>
               </button>
 
               <button
@@ -95,24 +128,40 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                   soundService.playClick();
                   toggleGPSMode('real_gps');
                 }}
-                className={`py-2 px-3 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`py-2 px-2.5 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                   rtkState.mode === 'real_gps'
-                    ? 'bg-emerald-600 border-emerald-600 text-white shadow-xs'
+                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <Smartphone className="w-4 h-4" />
-                <span>真机GPS传感器</span>
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>真机 GPS 芯片</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundService.playClick();
+                  toggleGPSMode('bluetooth_gnss');
+                }}
+                className={`py-2 px-2.5 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  rtkState.mode === 'bluetooth_gnss'
+                    ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Bluetooth className="w-3.5 h-3.5" />
+                <span>外置蓝牙 RTK</span>
               </button>
             </div>
 
             {/* Real GPS Sensor Status Diagnostic & High Rate Control Details */}
             {rtkState.mode === 'real_gps' && (
-              <div className="mt-2 p-2.5 rounded-lg bg-emerald-50/80 border border-emerald-200 text-xs text-slate-700 space-y-2">
-                <div className="flex items-center justify-between text-emerald-900 font-semibold">
-                  <span>硬件传感器状态:</span>
+              <div className="mt-2 p-2.5 rounded-lg bg-blue-50/80 border border-blue-200 text-xs text-slate-700 space-y-2">
+                <div className="flex items-center justify-between text-blue-900 font-semibold">
+                  <span>物理传感器状态:</span>
                   <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
                     {rtkState.realGpsStatus === 'locked'
                       ? '已锁定真机GNSS'
                       : rtkState.realGpsStatus === 'locating'
@@ -126,23 +175,23 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                   {rtkState.realGpsMessage || '已连接手机/平板原生定位服务，并过滤地图点击篡改。'}
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] border-t border-emerald-200/60 pt-1.5 font-mono">
-                  <span className="text-emerald-900 font-sans">实时物理刷新率:</span>
-                  <span className="font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded border border-emerald-300">
+                <div className="flex items-center justify-between text-[11px] border-t border-blue-200/60 pt-1.5 font-mono">
+                  <span className="text-blue-900 font-sans">实时物理刷新率:</span>
+                  <span className="font-bold text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-300">
                     {(rtkState.realGpsFrequencyHz || 4.0).toFixed(1)} Hz (&gt;2Hz 高速)
                   </span>
                 </div>
 
                 {rtkState.realGpsAccuracy !== undefined && (
-                  <div className="text-[11px] text-emerald-800 font-mono flex items-center justify-between">
+                  <div className="text-[11px] text-blue-800 font-mono flex items-center justify-between">
                     <span className="font-sans">原生传感器精度:</span>
                     <span>±{rtkState.realGpsAccuracy.toFixed(1)} 米</span>
                   </div>
                 )}
 
                 {/* Sampling Frequency Buttons */}
-                <div className="space-y-1 pt-1 border-t border-emerald-200/60">
-                  <div className="text-[10px] font-bold text-emerald-900 uppercase">
+                <div className="space-y-1 pt-1 border-t border-blue-200/60">
+                  <div className="text-[10px] font-bold text-blue-900 uppercase">
                     硬件数据采集刷新率设定 (&gt;2Hz):
                   </div>
                   <div className="grid grid-cols-4 gap-1">
@@ -158,8 +207,8 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                         onClick={() => setTargetSamplingHz(item.hz)}
                         className={`py-1 rounded text-[10px] font-mono font-bold transition cursor-pointer border ${
                           (rtkState.targetSamplingHz || 4.0) === item.hz
-                            ? 'bg-emerald-600 border-emerald-700 text-white shadow-2xs'
-                            : 'bg-white/90 border-emerald-300 text-emerald-900 hover:bg-emerald-100'
+                            ? 'bg-blue-600 border-blue-700 text-white shadow-2xs'
+                            : 'bg-white/90 border-blue-300 text-blue-900 hover:bg-blue-100'
                         }`}
                       >
                         {item.label}
@@ -167,6 +216,79 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                     ))}
                   </div>
                 </div>
+
+                {/* Action buttons */}
+                <div className="pt-1.5 border-t border-blue-200/60 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundService.playClick();
+                      fetchRealGPSPosition(true);
+                    }}
+                    className="py-1.5 px-2 rounded-lg bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                  >
+                    <Smartphone className="w-3.5 h-3.5" />
+                    <span>发起系统授权</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openStandaloneWindow}
+                    className="py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>独立窗口打开</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* IP Location Status Details */}
+            {rtkState.mode === 'ip_location' && (
+              <div className="mt-2 p-2.5 rounded-lg bg-emerald-50/80 border border-emerald-200 text-xs text-slate-700 space-y-2">
+                <div className="flex items-center justify-between text-emerald-900 font-semibold">
+                  <span>免权限基站定位状态:</span>
+                  <span className="text-emerald-700 font-bold">免授权已就绪</span>
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  {rtkState.realGpsMessage || '通过网络基站/IP免权限解析地理经纬度。'}
+                </div>
+                {rtkState.ipCity && (
+                  <div className="text-[11px] font-mono text-emerald-900">
+                    解析地点: <b>{rtkState.ipCity}</b>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={fetchIpLocationPosition}
+                  className="w-full py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>刷新 IP 网络基站经纬度</span>
+                </button>
+              </div>
+            )}
+
+            {/* Bluetooth GNSS Status Details */}
+            {rtkState.mode === 'bluetooth_gnss' && (
+              <div className="mt-2 p-2.5 rounded-lg bg-indigo-50/80 border border-indigo-200 text-xs text-slate-700 space-y-2">
+                <div className="flex items-center justify-between text-indigo-900 font-semibold">
+                  <span>外置蓝牙 RTK 接收机:</span>
+                  <span className="text-indigo-700 font-bold">
+                    {rtkState.bluetoothDeviceName || '未连接'}
+                  </span>
+                </div>
+                <div className="text-[11px] text-slate-600">
+                  {rtkState.realGpsMessage || '通过 Web Bluetooth 串口直接接收外置 RTK 接收机 NMEA 差分流。'}
+                </div>
+                <button
+                  type="button"
+                  onClick={connectBluetoothGNSS}
+                  className="w-full py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                >
+                  <Bluetooth className="w-3.5 h-3.5" />
+                  <span>搜索并配对外置 RTK 接收机</span>
+                </button>
               </div>
             )}
           </div>

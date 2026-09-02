@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { RTKProvider } from './context/RTKContext';
-import { SurveyDataProvider } from './context/SurveyDataContext';
+import React, { useState, useRef, useEffect } from 'react';
+import { RTKProvider, useRTK } from './context/RTKContext';
+import { SurveyDataProvider, useSurveyData } from './context/SurveyDataContext';
 import { TopStatusBar } from './components/layout/TopStatusBar';
 import { SideToolbar } from './components/layout/SideToolbar';
 
@@ -36,15 +36,55 @@ import { OfflineMapModal } from './components/tools/OfflineMapModal';
 import { AccountActivationModal } from './components/tools/AccountActivationModal';
 import { UnitSettingsModal } from './components/tools/UnitSettingsModal';
 import { ExportImportModal } from './components/tools/ExportImportModal';
+import { GpsPermissionPromptModal } from './components/tools/GpsPermissionPromptModal';
 
 import { ScreenType, SurveyPoint } from './types';
 import { soundService } from './utils/sound';
-import { useRTK } from './context/RTKContext';
+import { nativePermissionService } from './utils/nativePermissionService';
+import { fileStorageService } from './utils/fileStorageService';
 
 function MainLayout() {
-  const { rtkState } = useRTK();
+  const { rtkState, fetchRealGPSPosition } = useRTK();
+  const { activeRecording, appendTrackPoint } = useSurveyData();
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('home');
   const [screenStack, setScreenStack] = useState<ScreenType[]>([]);
+
+  // Persistent track point logger loop when recording in background
+  const rtkStateRef = useRef(rtkState);
+  useEffect(() => {
+    rtkStateRef.current = rtkState;
+  }, [rtkState]);
+
+  useEffect(() => {
+    if (!activeRecording.isRecording) return;
+
+    const timer = setInterval(() => {
+      const state = rtkStateRef.current;
+      appendTrackPoint(state.currentLat, state.currentLon, state.currentAlt, state.speed);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [activeRecording.isRecording, appendTrackPoint]);
+
+  // Automatic Native System Permissions (Location & Storage) and directory initialization on app startup
+  useEffect(() => {
+    // 1. Immediately initialize persistent directories (/storage/emulated/0/com.rtkprogect.files/)
+    fileStorageService.initDirectories().catch(() => {});
+
+    // 2. Request all required native permissions (Location + Storage)
+    if (nativePermissionService.isNativePlatform()) {
+      nativePermissionService.requestAllPermissions().then((status) => {
+        if (status.locationGranted) {
+          fetchRealGPSPosition(false);
+        }
+        // Ensure directories are created after permission is granted
+        fileStorageService.initDirectories().catch(() => {});
+      });
+    } else {
+      // In web/PWA mode, ensure directory structures are initialized
+      fileStorageService.checkAndRequestPermissions().catch(() => {});
+    }
+  }, [fetchRealGPSPosition]);
 
   // Active Modals state
   const [activeModal, setActiveModal] = useState<string | null>(null);
@@ -284,6 +324,9 @@ function MainLayout() {
           onClose={() => setActiveModal(null)}
         />
       )}
+
+      {/* GPS Permission Request & Diagnostic Prompt Modal */}
+      <GpsPermissionPromptModal />
     </div>
   );
 }

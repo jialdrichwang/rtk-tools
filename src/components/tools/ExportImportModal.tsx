@@ -22,6 +22,7 @@ import {
   parseCASSToPoints,
 } from '../../utils/exportImport';
 import { soundService } from '../../utils/sound';
+import { fileStorageService } from '../../utils/fileStorageService';
 
 interface ExportImportModalProps {
   onClose: () => void;
@@ -40,31 +41,39 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
   const [importedPreview, setImportedPreview] = useState<any[]>([]);
 
   // Export CSV
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     soundService.playClick();
     const csv = exportPointsToCSV(points);
-    downloadFile(csv, `${currentProject.name}_点库坐标成果.csv`, 'text/csv;charset=utf-8');
+    const filename = `${currentProject.name}_点库坐标成果.csv`;
+    downloadFile(csv, filename, 'text/csv;charset=utf-8');
+    await fileStorageService.saveFile('point', filename, csv, 'text/csv;charset=utf-8').catch(() => {});
   };
 
   // Export CASS .DAT
-  const handleExportCASS = () => {
+  const handleExportCASS = async () => {
     soundService.playClick();
     const dat = exportPointsToCASS(points);
-    downloadFile(dat, `${currentProject.name}_南方CASS.dat`, 'text/plain;charset=utf-8');
+    const filename = `${currentProject.name}_南方CASS.dat`;
+    downloadFile(dat, filename, 'text/plain;charset=utf-8');
+    await fileStorageService.saveFile('point', filename, dat, 'text/plain;charset=utf-8').catch(() => {});
   };
 
   // Export KML
-  const handleExportKML = () => {
+  const handleExportKML = async () => {
     soundService.playClick();
     const kml = exportPointsToKML(points);
-    downloadFile(kml, `${currentProject.name}_奥维与谷歌.kml`, 'application/vnd.google-earth.kml+xml');
+    const filename = `${currentProject.name}_奥维与谷歌.kml`;
+    downloadFile(kml, filename, 'application/vnd.google-earth.kml+xml');
+    await fileStorageService.saveFile('point', filename, kml, 'application/vnd.google-earth.kml+xml').catch(() => {});
   };
 
   // Export TXT
-  const handleExportTXT = () => {
+  const handleExportTXT = async () => {
     soundService.playClick();
     const content = points.map((p) => `${p.name},${p.x.toFixed(4)},${p.y.toFixed(4)},${p.elevation.toFixed(4)},${p.code || ''}`).join('\r\n');
-    downloadFile(content, `${currentProject.name}_点位坐标.txt`, 'text/plain;charset=utf-8');
+    const filename = `${currentProject.name}_点位坐标.txt`;
+    downloadFile(content, filename, 'text/plain;charset=utf-8');
+    await fileStorageService.saveFile('point', filename, content, 'text/plain;charset=utf-8').catch(() => {});
   };
 
   // File Import handler

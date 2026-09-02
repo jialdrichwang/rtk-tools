@@ -1,9 +1,21 @@
 import { SurveyPoint, SurveyTrack } from '../types';
+import { fileStorageService } from './fileStorageService';
 
 /**
- * Downloads a string content as a file to user's device
+ * Downloads a string content as a file to user's device and mirrors to native file storage
  */
-export function downloadFile(content: string, filename: string, mimeType = 'text/plain;charset=utf-8') {
+export function downloadFile(
+  content: string,
+  filename: string,
+  mimeType = 'text/plain;charset=utf-8',
+  subfolder: 'points' | 'tracks' | 'project' | 'mapdata' = 'points'
+) {
+  // 1. Auto-save to /storage/emulated/0/com.rtkprogect.files/<subfolder>/
+  fileStorageService.saveFile(subfolder, filename, content, mimeType).catch((err) => {
+    console.warn('Auto-save to storage error:', err);
+  });
+
+  // 2. Trigger browser/device file download
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

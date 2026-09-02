@@ -39,6 +39,7 @@ import {
   exportTrackToTXT,
 } from '../../utils/exportImport';
 import { soundService } from '../../utils/sound';
+import { fileStorageService } from '../../utils/fileStorageService';
 
 interface RouteManagementScreenProps {
   onBack: () => void;
@@ -54,22 +55,33 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
   onBack,
   onNavigateToMap,
 }) => {
-  const { routes, points, tracks, addRoute, deleteRoute, addTrack, deleteTrack } = useSurveyData();
+  const {
+    routes,
+    points,
+    tracks,
+    addRoute,
+    deleteRoute,
+    addTrack,
+    deleteTrack,
+    activeRecording,
+    startTrackRecording,
+    stopTrackRecording,
+  } = useSurveyData();
   const { rtkState } = useRTK();
 
   const [activeTab, setActiveTab] = useState<'record' | 'files' | 'planned'>('record');
 
-  // Recording states
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordedPoints, setRecordedPoints] = useState<TrackPoint[]>([]);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [recordedDistance, setRecordedDistance] = useState(0);
+  // Effective Recording states synchronized with Background Tracking Service
+  const isRecording = activeRecording.isRecording;
+  const recordedPoints = activeRecording.points;
+  const recordingSeconds = activeRecording.elapsedSeconds;
+  const recordedDistance = activeRecording.distance;
 
   // Settings for recording parameters
   const [frequency, setFrequency] = useState<RecordFrequency>('1s');
   const [autoSaveTime, setAutoSaveTime] = useState<AutoSaveTimeTrigger>('none');
   const [autoSaveDist, setAutoSaveDist] = useState<AutoSaveDistTrigger>('none');
-  const [saveFormat, setSaveFormat] = useState<RecordFileFormat>('CSV');
+  const [saveFormat, setSaveFormat] = useState<RecordFileFormat>('GPX');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Selected file ids for batch deletion
@@ -86,70 +98,6 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
   const [replayIndex, setReplayIndex] = useState(0);
   const [isReplaying, setIsReplaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 5 | 10>(2);
-
-  // Recording Timer Loop
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (isRecording) {
-      const intervalMs =
-        frequency === '0.5s' ? 500 :
-        frequency === '1s' ? 1000 :
-        frequency === '2s' ? 2000 :
-        frequency === '5s' ? 5000 : 10000;
-
-      timer = setInterval(() => {
-        setRecordingSeconds((prev) => prev + intervalMs / 1000);
-
-        const now = new Date();
-        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
-          now.getMinutes()
-        ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-
-        const newPt: TrackPoint = {
-          lat: rtkState.currentLat,
-          lon: rtkState.currentLon,
-          elevation: rtkState.currentAlt,
-          time: timeStr,
-          speed: rtkState.speed,
-        };
-
-        setRecordedPoints((prev) => {
-          if (prev.length > 0) {
-            const last = prev[prev.length - 1];
-            const distInc = haversineDistance(last.lat, last.lon, newPt.lat, newPt.lon);
-            setRecordedDistance((d) => d + distInc);
-          }
-          return [...prev, newPt];
-        });
-      }, intervalMs);
-    }
-    return () => clearInterval(timer);
-  }, [isRecording, frequency, rtkState.currentLat, rtkState.currentLon, rtkState.currentAlt, rtkState.speed]);
-
-  // Check auto-save distance/time trigger
-  useEffect(() => {
-    if (!isRecording || recordedPoints.length < 2) return;
-
-    let timeLimitSec = 0;
-    if (autoSaveTime === '1m') timeLimitSec = 60;
-    else if (autoSaveTime === '5m') timeLimitSec = 300;
-    else if (autoSaveTime === '10m') timeLimitSec = 600;
-    else if (autoSaveTime === '30m') timeLimitSec = 1800;
-    else if (autoSaveTime === '60m') timeLimitSec = 3600;
-
-    let distLimitMeters = 0;
-    if (autoSaveDist === '50m') distLimitMeters = 50;
-    else if (autoSaveDist === '100m') distLimitMeters = 100;
-    else if (autoSaveDist === '500m') distLimitMeters = 500;
-    else if (autoSaveDist === '1000m') distLimitMeters = 1000;
-
-    const timeTriggered = timeLimitSec > 0 && recordingSeconds >= timeLimitSec;
-    const distTriggered = distLimitMeters > 0 && recordedDistance >= distLimitMeters;
-
-    if (timeTriggered || distTriggered) {
-      saveCurrentRecordedRoute(true);
-    }
-  }, [recordingSeconds, recordedDistance, isRecording]);
 
   // Replay animation timer
   useEffect(() => {
@@ -170,86 +118,42 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
   }, [isReplaying, replayTrack, replaySpeed]);
 
   const handleStartRecording = () => {
-    soundService.playClick();
-    setRecordedPoints([]);
-    setRecordingSeconds(0);
-    setRecordedDistance(0);
-    setIsRecording(true);
-  };
-
-  const saveCurrentRecordedRoute = (isAutoChunk = false) => {
-    if (recordedPoints.length < 2) return;
-
-    const now = new Date();
-    const dateTag = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
-      now.getDate()
-    ).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-
-    const trackName = isAutoChunk
-      ? `自动分段航线_${dateTag}`
-      : `实测航线航迹_${dateTag}`;
-
-    const newTrack = addTrack({
-      name: trackName,
-      points: [...recordedPoints],
-      distance: Math.round(recordedDistance * 10) / 10,
-      duration: Math.round(recordingSeconds),
-      startTime: recordedPoints[0].time,
-      endTime: recordedPoints[recordedPoints.length - 1].time,
-      color: '#0284c7',
+    startTrackRecording(undefined, {
+      lat: rtkState.currentLat,
+      lon: rtkState.currentLon,
+      elevation: rtkState.currentAlt,
+      speed: rtkState.speed,
     });
-
-    // Auto export file if configured
-    if (saveFormat === 'CSV') {
-      const csv = exportTrackToCSV(newTrack);
-      downloadFile(csv, `${trackName}.csv`, 'text/csv;charset=utf-8');
-    } else if (saveFormat === 'KML') {
-      const kml = exportTrackToKML(newTrack);
-      downloadFile(kml, `${trackName}.kml`, 'application/vnd.google-earth.kml+xml');
-    } else if (saveFormat === 'GPX') {
-      const gpx = exportTrackToGPX(newTrack);
-      downloadFile(gpx, `${trackName}.gpx`, 'application/gpx+xml');
-    } else if (saveFormat === 'DAT') {
-      const dat = exportTrackToDAT(newTrack);
-      downloadFile(dat, `${trackName}.dat`, 'text/plain;charset=utf-8');
-    } else if (saveFormat === 'TXT') {
-      const txt = exportTrackToTXT(newTrack);
-      downloadFile(txt, `${trackName}.txt`, 'text/plain;charset=utf-8');
-    }
-
-    soundService.playSuccess();
-
-    if (isAutoChunk) {
-      setRecordedPoints([]);
-      setRecordingSeconds(0);
-      setRecordedDistance(0);
-    }
   };
 
   const handleStopRecording = () => {
-    soundService.playClick();
-    setIsRecording(false);
-    saveCurrentRecordedRoute(false);
+    stopTrackRecording(true);
   };
 
-  const handleExportTrackFile = (track: SurveyTrack, fmt: RecordFileFormat) => {
+  const handleExportTrackFile = async (track: SurveyTrack, fmt: RecordFileFormat) => {
     soundService.playClick();
+    let content = '';
+    let mime = 'text/plain;charset=utf-8';
+    const ext = fmt.toLowerCase();
+
     if (fmt === 'CSV') {
-      const content = exportTrackToCSV(track);
-      downloadFile(content, `${track.name}.csv`, 'text/csv;charset=utf-8');
+      content = exportTrackToCSV(track);
+      mime = 'text/csv;charset=utf-8';
     } else if (fmt === 'KML') {
-      const content = exportTrackToKML(track);
-      downloadFile(content, `${track.name}.kml`, 'application/vnd.google-earth.kml+xml');
+      content = exportTrackToKML(track);
+      mime = 'application/vnd.google-earth.kml+xml';
     } else if (fmt === 'GPX') {
-      const content = exportTrackToGPX(track);
-      downloadFile(content, `${track.name}.gpx`, 'application/gpx+xml');
+      content = exportTrackToGPX(track);
+      mime = 'application/gpx+xml';
     } else if (fmt === 'DAT') {
-      const content = exportTrackToDAT(track);
-      downloadFile(content, `${track.name}.dat`, 'text/plain;charset=utf-8');
+      content = exportTrackToDAT(track);
     } else {
-      const content = exportTrackToTXT(track);
-      downloadFile(content, `${track.name}.txt`, 'text/plain;charset=utf-8');
+      content = exportTrackToTXT(track);
     }
+
+    downloadFile(content, `${track.name}.${ext}`, mime);
+    // Also save converted file into /storage/emulated/0/com.rtkprogect.files/track/
+    await fileStorageService.saveFile('track', `${track.name}.${ext}`, content, mime).catch(() => {});
   };
 
   const handleDeleteSelectedTracks = () => {

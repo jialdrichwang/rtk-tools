@@ -109,7 +109,7 @@ export interface RTKState {
   speed: number; // m/s
   pressure: number; // 气压 hPa
   temperature: number; // °C
-  mode: 'simulated' | 'real_gps' | 'ntrip_cors';
+  mode: 'simulated' | 'real_gps' | 'ntrip_cors' | 'ip_location' | 'bluetooth_gnss';
   screenRotation: 0 | 180;
   antennaHeight: number; // 天线高 (m)
   realGpsStatus?: 'idle' | 'locating' | 'locked' | 'denied' | 'error';
@@ -117,6 +117,8 @@ export interface RTKState {
   realGpsMessage?: string;
   realGpsFrequencyHz?: number; // 实际实时刷新率 (Hz)
   targetSamplingHz?: number; // 目标刷新率 (默认 4Hz，大于2Hz)
+  ipCity?: string;
+  bluetoothDeviceName?: string;
 }
 
 export interface UnitSettings {
