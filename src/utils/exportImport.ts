@@ -10,7 +10,7 @@ export function downloadFile(
   mimeType = 'text/plain;charset=utf-8',
   subfolder: 'points' | 'tracks' | 'project' | 'mapdata' = 'points'
 ) {
-  // 1. Auto-save to /storage/emulated/0/com.rtkprogect.files/<subfolder>/
+  // 1. Auto-save to /storage/emulated/0/com.rtkproject.files/<subfolder>/
   fileStorageService.saveFile(subfolder, filename, content, mimeType).catch((err) => {
     console.warn('Auto-save to storage error:', err);
   });
@@ -168,60 +168,121 @@ export function exportTrackToTXT(track: SurveyTrack): string {
 }
 
 /**
- * Parse Coordinate text or CSV file into partial SurveyPoints
+ * Parse Coordinate text, CSV, CASS, or JSON into partial SurveyPoints
  */
 export function parseImportPoints(text: string): Partial<SurveyPoint>[] {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  // 1. Try parsing JSON format
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const data = JSON.parse(trimmed);
+      const list = Array.isArray(data) ? data : [data];
+      const res: Partial<SurveyPoint>[] = [];
+      list.forEach((item, idx) => {
+        if (item && typeof item === 'object') {
+          res.push({
+            name: item.name || item.pointName || item.id || `P_${idx + 1}`,
+            code: item.code || item.pointCode || 'IMP',
+            x: typeof item.x === 'number' ? item.x : parseFloat(item.x) || 0,
+            y: typeof item.y === 'number' ? item.y : parseFloat(item.y) || 0,
+            lat: typeof item.lat === 'number' ? item.lat : parseFloat(item.lat) || 0,
+            lon: typeof item.lon === 'number' ? item.lon : parseFloat(item.lon) || 0,
+            elevation: typeof item.elevation === 'number' ? item.elevation : (parseFloat(item.h || item.elevation) || 0),
+            desc: item.desc || item.notes || '',
+            coordSystem: item.coordSystem || 'CGCS2000',
+          });
+        }
+      });
+      if (res.length > 0) return res;
+    } catch {
+      // Fall through to text parsing
+    }
+  }
+
+  // 2. Line by line text / CASS / CSV parsing
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const result: Partial<SurveyPoint>[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Skip header line if detected
-    if (i === 0 && (line.includes('点名') || line.includes('Name') || line.toLowerCase().includes('lat'))) {
+    // Skip comments or table headers
+    if (line.startsWith('#') || line.startsWith('//')) continue;
+    if (
+      i === 0 &&
+      (line.includes('点名') ||
+        line.toLowerCase().includes('name') ||
+        line.toLowerCase().includes('lat') ||
+        line.includes('北坐标') ||
+        line.includes('东坐标'))
+    ) {
       continue;
     }
 
-    const parts = line.split(/[,;\t ]+/);
+    // Support comma, semicolon, tab, or spaces
+    let parts: string[];
+    if (line.includes(',')) {
+      parts = line.split(',').map((s) => s.trim().replace(/^["']|["']$/g, ''));
+    } else if (line.includes(';')) {
+      parts = line.split(';').map((s) => s.trim());
+    } else if (line.includes('\t')) {
+      parts = line.split('\t').map((s) => s.trim());
+    } else {
+      parts = line.split(/\s+/).map((s) => s.trim());
+    }
+
     if (parts.length >= 3) {
       const name = parts[0] || `PT_${i + 1}`;
-      
-      // Check if parts[1] is a number or code
       let code = '';
-      let n1 = parseFloat(parts[1]);
-      let n2 = parseFloat(parts[2]);
-      let n3 = parts[3] ? parseFloat(parts[3]) : 0;
+      let n1 = 0;
+      let n2 = 0;
+      let n3 = 0;
 
-      if (isNaN(n1) && parts.length >= 4) {
+      // Handle South CASS format: Name,Code,Y,X,H (e.g. 1,,500000.12,3378000.45,45.6 or 1,JC1,500000.12,3378000.45,45.6)
+      if (parts.length >= 5 && isNaN(parseFloat(parts[1]))) {
         code = parts[1];
         n1 = parseFloat(parts[2]);
         n2 = parseFloat(parts[3]);
-        n3 = parts[4] ? parseFloat(parts[4]) : 0;
+        n3 = parseFloat(parts[4]) || 0;
+      } else if (parts.length >= 4 && isNaN(parseFloat(parts[1]))) {
+        code = parts[1];
+        n1 = parseFloat(parts[2]);
+        n2 = parseFloat(parts[3]);
+        n3 = 0;
+      } else {
+        n1 = parseFloat(parts[1]);
+        n2 = parseFloat(parts[2]);
+        n3 = parts[3] ? parseFloat(parts[3]) : 0;
+        if (parts[4] && isNaN(parseFloat(parts[4]))) {
+          code = parts[4];
+        }
       }
 
       if (!isNaN(n1) && !isNaN(n2)) {
-        // Detect if coordinate is Lat/Lon (e.g. 30.xxx, 114.xxx) or Gauss (e.g. 3389000, 500000)
         let x = 0;
         let y = 0;
         let lat = 0;
         let lon = 0;
         const elevation = isNaN(n3) ? 0 : n3;
 
+        // Detect if coordinates are Lat/Lon
         if (n1 < 90 && n2 < 180 && n1 > -90 && n2 > -180) {
-          // It's Lat/Lon
+          // n1: Lat, n2: Lon
           lat = n1;
           lon = n2;
         } else if (n2 < 90 && n1 < 180 && n2 > -90 && n1 > -180) {
-          // Lon/Lat
+          // n1: Lon, n2: Lat
           lon = n1;
           lat = n2;
         } else {
           // Plane coordinates (X / Y or Y / X)
+          // In China, Gauss-Kruger North X is typically 2~4 million (7 digits), East Y is typically 500,000 or zone+500,000 (6~8 digits)
           if (n1 > 1000000 && n2 < 1000000) {
-            // n1 is X (North), n2 is Y (East)
             x = n1;
             y = n2;
           } else if (n2 > 1000000 && n1 < 1000000) {
-            // n2 is X (North), n1 is Y (East)
+            // South CASS: Y is first, X is second
             x = n2;
             y = n1;
           } else {
@@ -255,11 +316,11 @@ export function parseCSVToPoints(text: string, coordSystem = 'CGCS2000' as any):
     id: `csv_pt_${Date.now()}_${idx}`,
     name: p.name || `P_${idx + 1}`,
     code: p.code || 'CSV',
-    lat: p.lat || 30.5285,
-    lon: p.lon || 114.3985,
+    lat: p.lat || 0,
+    lon: p.lon || 0,
     elevation: p.elevation || 0,
-    x: p.x || 3378000 + idx * 10,
-    y: p.y || 500000 + idx * 10,
+    x: p.x || 0,
+    y: p.y || 0,
     coordSystem: (p.coordSystem || coordSystem),
     createdAt: new Date().toLocaleTimeString(),
   }));
@@ -274,12 +335,124 @@ export function parseCASSToPoints(text: string, coordSystem = 'CGCS2000' as any)
     id: `cass_pt_${Date.now()}_${idx}`,
     name: p.name || `CASS_${idx + 1}`,
     code: p.code || 'CASS',
-    lat: p.lat || 30.5285,
-    lon: p.lon || 114.3985,
+    lat: p.lat || 0,
+    lon: p.lon || 0,
     elevation: p.elevation || 0,
-    x: p.x || 3378000 + idx * 10,
-    y: p.y || 500000 + idx * 10,
+    x: p.x || 0,
+    y: p.y || 0,
     coordSystem: (p.coordSystem || coordSystem),
     createdAt: new Date().toLocaleTimeString(),
   }));
+}
+
+/**
+ * Parse SurveyTrack from GPX XML text
+ */
+export function parseTrackFromGPX(xmlText: string): Partial<SurveyTrack> | null {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+    const trkpts = Array.from(doc.querySelectorAll('trkpt'));
+    if (trkpts.length === 0) return null;
+
+    const points = trkpts.map((pt) => {
+      const lat = parseFloat(pt.getAttribute('lat') || '0');
+      const lon = parseFloat(pt.getAttribute('lon') || '0');
+      const ele = parseFloat(pt.querySelector('ele')?.textContent || '0');
+      const time = pt.querySelector('time')?.textContent || new Date().toISOString();
+      const speed = parseFloat(pt.querySelector('speed')?.textContent || '0');
+      return { lat, lon, elevation: isNaN(ele) ? 0 : ele, time, speed: isNaN(speed) ? 0 : speed };
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon) && (p.lat !== 0 || p.lon !== 0));
+
+    const name = doc.querySelector('trk > name')?.textContent || doc.querySelector('name')?.textContent || `GPX航迹_${Date.now()}`;
+    return {
+      name,
+      points,
+      distance: 0,
+      duration: 0,
+      startTime: points[0]?.time || new Date().toISOString(),
+      endTime: points[points.length - 1]?.time || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse SurveyTrack from KML XML text
+ */
+export function parseTrackFromKML(xmlText: string): Partial<SurveyTrack> | null {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+    const coordEl = doc.querySelector('coordinates');
+    if (!coordEl || !coordEl.textContent) return null;
+
+    const rawCoords = coordEl.textContent.trim().split(/\s+/);
+    const points = rawCoords.map((c, idx) => {
+      const parts = c.split(',');
+      const lon = parseFloat(parts[0] || '0');
+      const lat = parseFloat(parts[1] || '0');
+      const ele = parseFloat(parts[2] || '0');
+      return {
+        lat,
+        lon,
+        elevation: isNaN(ele) ? 0 : ele,
+        time: new Date(Date.now() + idx * 1000).toISOString(),
+      };
+    }).filter(p => !isNaN(p.lat) && !isNaN(p.lon) && (p.lat !== 0 || p.lon !== 0));
+
+    const name = doc.querySelector('Placemark > name')?.textContent || doc.querySelector('name')?.textContent || `KML航迹_${Date.now()}`;
+    return {
+      name,
+      points,
+      distance: 0,
+      duration: 0,
+      startTime: points[0]?.time || new Date().toISOString(),
+      endTime: points[points.length - 1]?.time || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Convert a track to a specific format string
+ */
+export type TrackExportFormat = 'kml' | 'gpx' | 'csv' | 'cass_dat' | 'txt';
+
+export function convertTrackToFormat(track: SurveyTrack, format: TrackExportFormat): { content: string; filename: string; mimeType: string } {
+  switch (format) {
+    case 'kml':
+      return {
+        content: exportTrackToKML(track),
+        filename: `${track.name}.kml`,
+        mimeType: 'application/vnd.google-earth.kml+xml',
+      };
+    case 'gpx':
+      return {
+        content: exportTrackToGPX(track),
+        filename: `${track.name}.gpx`,
+        mimeType: 'application/gpx+xml',
+      };
+    case 'csv':
+      return {
+        content: exportTrackToCSV(track),
+        filename: `${track.name}.csv`,
+        mimeType: 'text/csv;charset=utf-8',
+      };
+    case 'cass_dat':
+      return {
+        content: exportTrackToDAT(track),
+        filename: `${track.name}.dat`,
+        mimeType: 'text/plain;charset=utf-8',
+      };
+    case 'txt':
+    default:
+      return {
+        content: exportTrackToTXT(track),
+        filename: `${track.name}.txt`,
+        mimeType: 'text/plain;charset=utf-8',
+      };
+  }
 }

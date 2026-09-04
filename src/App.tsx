@@ -36,12 +36,14 @@ import { OfflineMapModal } from './components/tools/OfflineMapModal';
 import { AccountActivationModal } from './components/tools/AccountActivationModal';
 import { UnitSettingsModal } from './components/tools/UnitSettingsModal';
 import { ExportImportModal } from './components/tools/ExportImportModal';
+import { HistoryDataImportModal } from './components/tools/HistoryDataImportModal';
 import { GpsPermissionPromptModal } from './components/tools/GpsPermissionPromptModal';
 
 import { ScreenType, SurveyPoint } from './types';
 import { soundService } from './utils/sound';
 import { nativePermissionService } from './utils/nativePermissionService';
 import { fileStorageService } from './utils/fileStorageService';
+import { backgroundTrackingService } from './utils/backgroundTrackingService';
 
 function MainLayout() {
   const { rtkState, fetchRealGPSPosition } = useRTK();
@@ -49,7 +51,7 @@ function MainLayout() {
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('home');
   const [screenStack, setScreenStack] = useState<ScreenType[]>([]);
 
-  // Persistent track point logger loop when recording in background
+  // Persistent track point logger loop when recording in background (Screen-off resilient)
   const rtkStateRef = useRef(rtkState);
   useEffect(() => {
     rtkStateRef.current = rtkState;
@@ -58,17 +60,23 @@ function MainLayout() {
   useEffect(() => {
     if (!activeRecording.isRecording) return;
 
-    const timer = setInterval(() => {
+    const logCurrentPoint = () => {
       const state = rtkStateRef.current;
       appendTrackPoint(state.currentLat, state.currentLon, state.currentAlt, state.speed);
-    }, 1000);
+    };
 
-    return () => clearInterval(timer);
+    backgroundTrackingService.start(logCurrentPoint);
+    const timer = setInterval(logCurrentPoint, 1000);
+
+    return () => {
+      backgroundTrackingService.stop(logCurrentPoint);
+      clearInterval(timer);
+    };
   }, [activeRecording.isRecording, appendTrackPoint]);
 
   // Automatic Native System Permissions (Location & Storage) and directory initialization on app startup
   useEffect(() => {
-    // 1. Immediately initialize persistent directories (/storage/emulated/0/com.rtkprogect.files/)
+    // 1. Immediately initialize persistent directories (/storage/emulated/0/com.rtkproject.files/)
     fileStorageService.initDirectories().catch(() => {});
 
     // 2. Request all required native permissions (Location + Storage)
@@ -172,6 +180,7 @@ function MainLayout() {
                 onBack={handleBack}
                 onOpenStakeout={() => setActiveModal('point_stakeout')}
                 onOpenMarkWaypoint={() => navigateTo('mark_waypoint')}
+                onOpenOfflineMap={() => setActiveModal('offline_map')}
               />
             )}
 
@@ -180,6 +189,8 @@ function MainLayout() {
                 onBack={handleBack}
                 onAddPoint={() => navigateTo('mark_waypoint')}
                 onStakeoutPoint={handleStakeoutPoint}
+                onOpenImport={handleOpenImport}
+                onOpenExport={handleOpenExport}
               />
             )}
 
@@ -194,6 +205,7 @@ function MainLayout() {
                 onOpenActivation={() => setActiveModal('activation')}
                 onOpenPointLibrary={() => navigateTo('waypoint_list')}
                 onOpenExportTrack={() => navigateTo('tracks')}
+                onOpenHistoryImport={() => setActiveModal('history_data_import')}
               />
             )}
 
@@ -307,7 +319,12 @@ function MainLayout() {
       )}
 
       {activeModal === 'offline_map' && (
-        <OfflineMapModal onClose={() => setActiveModal(null)} />
+        <OfflineMapModal
+          isOpen={true}
+          onClose={() => setActiveModal(null)}
+          centerLat={rtkState.currentLat}
+          centerLon={rtkState.currentLon}
+        />
       )}
 
       {activeModal === 'activation' && (
@@ -323,6 +340,10 @@ function MainLayout() {
           initialTab={exportImportTab}
           onClose={() => setActiveModal(null)}
         />
+      )}
+
+      {activeModal === 'history_data_import' && (
+        <HistoryDataImportModal onClose={() => setActiveModal(null)} />
       )}
 
       {/* GPS Permission Request & Diagnostic Prompt Modal */}

@@ -24,6 +24,7 @@ interface HomeScreenProps {
 export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onOpenStorageModal }) => {
   const {
     currentProject,
+    projects,
     points,
     routes,
     tracks,
@@ -166,6 +167,81 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onOpenStorag
             切换项目
           </button>
         </div>
+      </div>
+
+      {/* Realtime Synchronized Ledger Counters (航点数 / 航迹数 / 规划数 / 工程数 实时同步更新) */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-2.5 mb-3.5 grid grid-cols-4 gap-2 shadow-xs">
+        <button
+          onClick={() => {
+            soundService.playClick();
+            onNavigate('waypoint_list');
+          }}
+          className="bg-blue-50/70 hover:bg-blue-100/80 border border-blue-200/70 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer transition text-center group"
+          title="点击查阅航点管理台账"
+        >
+          <div className="flex items-center gap-1 text-[11px] font-bold text-blue-700">
+            <MapPin className="w-3.5 h-3.5 text-blue-600 group-hover:scale-110 transition-transform" />
+            <span>航点数</span>
+          </div>
+          <div className="text-xl font-black font-mono text-blue-900 mt-0.5 leading-none">
+            {points.length}
+          </div>
+          <span className="text-[9px] text-blue-600/90 font-medium mt-1">点库全要素</span>
+        </button>
+
+        <button
+          onClick={() => {
+            soundService.playClick();
+            onNavigate('routes');
+          }}
+          className="bg-teal-50/70 hover:bg-teal-100/80 border border-teal-200/70 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer transition text-center group"
+          title="点击查阅航迹实录列表"
+        >
+          <div className="flex items-center gap-1 text-[11px] font-bold text-teal-700">
+            <Activity className="w-3.5 h-3.5 text-teal-600 group-hover:scale-110 transition-transform" />
+            <span>航迹数</span>
+          </div>
+          <div className="text-xl font-black font-mono text-teal-900 mt-0.5 leading-none">
+            {tracks.length}
+          </div>
+          <span className="text-[9px] text-teal-600/90 font-medium mt-1">实录轨迹</span>
+        </button>
+
+        <button
+          onClick={() => {
+            soundService.playClick();
+            onNavigate('routes');
+          }}
+          className="bg-sky-50/70 hover:bg-sky-100/80 border border-sky-200/70 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer transition text-center group"
+          title="点击查阅航线设计与规划"
+        >
+          <div className="flex items-center gap-1 text-[11px] font-bold text-sky-700">
+            <Route className="w-3.5 h-3.5 text-sky-600 group-hover:scale-110 transition-transform" />
+            <span>规划数</span>
+          </div>
+          <div className="text-xl font-black font-mono text-sky-900 mt-0.5 leading-none">
+            {routes.length}
+          </div>
+          <span className="text-[9px] text-sky-600/90 font-medium mt-1">设计规划</span>
+        </button>
+
+        <button
+          onClick={() => {
+            soundService.playClick();
+            onNavigate('project_manage');
+          }}
+          className="bg-purple-50/70 hover:bg-purple-100/80 border border-purple-200/70 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer transition text-center group"
+          title="点击查阅工程项目列表"
+        >
+          <div className="flex items-center gap-1 text-[11px] font-bold text-purple-700">
+            <FolderGit2 className="w-3.5 h-3.5 text-purple-600 group-hover:scale-110 transition-transform" />
+            <span>工程数</span>
+          </div>
+          <div className="text-xl font-black font-mono text-purple-900 mt-0.5 leading-none">
+            {projects.length}
+          </div>
+          <span className="text-[9px] text-purple-600/90 font-medium mt-1">本地项目</span>
+        </button>
       </div>
 
       {/* Responsive Grid Menu (Compact 1/2 Area for Higher Concentration) */}

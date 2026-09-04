@@ -11,6 +11,7 @@ import {
   CheckSquare,
   Square,
   FileDown,
+  FileUp,
   MapPin,
   Check,
 } from 'lucide-react';
@@ -22,6 +23,8 @@ interface WaypointListScreenProps {
   onAddPoint?: () => void;
   onSelectForStakeout?: (point: SurveyPoint) => void;
   onStakeoutPoint?: (point: SurveyPoint) => void;
+  onOpenImport?: () => void;
+  onOpenExport?: () => void;
 }
 
 export const WaypointListScreen: React.FC<WaypointListScreenProps> = ({
@@ -30,6 +33,8 @@ export const WaypointListScreen: React.FC<WaypointListScreenProps> = ({
   onAddPoint,
   onSelectForStakeout,
   onStakeoutPoint,
+  onOpenImport,
+  onOpenExport,
 }) => {
   const { points, deletePoint, deletePoints, updatePoint } = useSurveyData();
   const [search, setSearch] = useState('');
@@ -87,11 +92,39 @@ export const WaypointListScreen: React.FC<WaypointListScreenProps> = ({
 
         <button
           onClick={handleAdd}
-          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs cursor-pointer"
+          className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg shadow-xs cursor-pointer shrink-0"
         >
           <Plus className="w-3.5 h-3.5" />
-          <span>新建标定</span>
+          <span>标定</span>
         </button>
+
+        {onOpenImport && (
+          <button
+            onClick={() => {
+              soundService.playClick();
+              onOpenImport();
+            }}
+            title="导入外部坐标文件(CASS/CSV/TXT)"
+            className="flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 text-xs font-semibold px-2.5 py-1.5 rounded-lg shadow-2xs cursor-pointer shrink-0"
+          >
+            <FileUp className="w-3.5 h-3.5" />
+            <span>导入</span>
+          </button>
+        )}
+
+        {onOpenExport && (
+          <button
+            onClick={() => {
+              soundService.playClick();
+              onOpenExport();
+            }}
+            title="导出点库成果(CASS/CSV/KML/TXT)"
+            className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-semibold px-2.5 py-1.5 rounded-lg shadow-2xs cursor-pointer shrink-0"
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            <span>导出</span>
+          </button>
+        )}
 
         {selectedIds.length > 0 && (
           <button

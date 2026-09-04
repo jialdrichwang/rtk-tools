@@ -1,6 +1,6 @@
 /**
  * RTK Survey App Native File Storage Service
- * Manages persistent storage at: /storage/emulated/0/com.rtkprogect.files/
+ * Manages persistent storage at: /storage/emulated/0/com.rtkproject.files/
  * Subdirectories:
  *  - point/ (and alias points/)
  *  - track/ (and alias tracks/)
@@ -28,7 +28,7 @@ export interface StoredFileInfo {
   contentSnippet?: string;
 }
 
-const DEFAULT_ROOT_DIR = '/storage/emulated/0/com.rtkprogect.files';
+const DEFAULT_ROOT_DIR = '/storage/emulated/0/com.rtkproject.files';
 const STORAGE_ROOT_KEY = 'rtk_custom_storage_root';
 const SUBFOLDERS: StorageFolder[] = ['point', 'track', 'project', 'mapdata', 'points', 'tracks'];
 
@@ -95,7 +95,7 @@ class FileStorageService {
 
   /**
    * Initializes root directory and all required subdirectories:
-   * /storage/emulated/0/com.rtkprogect.files/
+   * /storage/emulated/0/com.rtkproject.files/
    *  ├── point/ (and points/)
    *  ├── track/ (and tracks/)
    *  ├── project/
@@ -107,7 +107,7 @@ class FileStorageService {
         // Ensure root folder exists
         try {
           await Filesystem.mkdir({
-            path: 'com.rtkprogect.files',
+            path: 'com.rtkproject.files',
             directory: Directory.ExternalStorage,
             recursive: true,
           });
@@ -118,7 +118,7 @@ class FileStorageService {
         for (const sub of SUBFOLDERS) {
           try {
             await Filesystem.mkdir({
-              path: `com.rtkprogect.files/${sub}`,
+              path: `com.rtkproject.files/${sub}`,
               directory: Directory.ExternalStorage,
               recursive: true,
             });
@@ -163,7 +163,7 @@ class FileStorageService {
         for (const target of targets) {
           try {
             await Filesystem.writeFile({
-              path: `com.rtkprogect.files/${target}/${filename}`,
+              path: `com.rtkproject.files/${target}/${filename}`,
               data: stringContent,
               directory: Directory.ExternalStorage,
               encoding: Encoding.UTF8,
@@ -210,7 +210,7 @@ class FileStorageService {
       try {
         if (this.isCapacitorNative) {
           const res = await Filesystem.readFile({
-            path: `com.rtkprogect.files/${folder}/${filename}`,
+            path: `com.rtkproject.files/${folder}/${filename}`,
             directory: Directory.ExternalStorage,
             encoding: Encoding.UTF8,
           });
@@ -222,7 +222,7 @@ class FileStorageService {
         // Continue to fallback
       }
 
-      const virtual = this.readFromVirtualStorage(folder, filename);
+      const virtual = (await this.readFromVirtualStorageAsync(folder, filename)) || this.readFromVirtualStorage(folder, filename);
       if (virtual) return virtual;
     }
 
@@ -254,7 +254,7 @@ class FileStorageService {
       if (this.isCapacitorNative) {
         try {
           const nativeList = await Filesystem.readdir({
-            path: `com.rtkprogect.files/${folder}`,
+            path: `com.rtkproject.files/${folder}`,
             directory: Directory.ExternalStorage,
           });
           if (nativeList && nativeList.files) {
@@ -299,7 +299,7 @@ class FileStorageService {
       try {
         if (this.isCapacitorNative) {
           await Filesystem.deleteFile({
-            path: `com.rtkprogect.files/${target}/${filename}`,
+            path: `com.rtkproject.files/${target}/${filename}`,
             directory: Directory.ExternalStorage,
           });
         }
@@ -348,13 +348,51 @@ class FileStorageService {
     return infos;
   }
 
-  // --- Virtual LocalStorage Mirrors for Zero Data Loss across Sessions & Re-installs ---
+  // --- Virtual Storage (IndexedDB + LocalStorage fallback) for Zero Data Loss across Sessions & Re-installs ---
+  private idbInstance: Promise<IDBDatabase> | null = null;
 
-  private saveToVirtualStorage(subfolder: string, filename: string, content: string) {
+  private getFileStorageDB(): Promise<IDBDatabase> {
+    if (this.idbInstance) return this.idbInstance;
+    this.idbInstance = new Promise((resolve, reject) => {
+      if (typeof window === 'undefined' || !window.indexedDB) {
+        return reject(new Error('IndexedDB not supported'));
+      }
+      const req = indexedDB.open('RTK_Virtual_Files_Store', 1);
+      req.onupgradeneeded = (e) => {
+        const db = (e.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains('files')) {
+          db.createObjectStore('files', { keyPath: 'key' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return this.idbInstance;
+  }
+
+  private async saveToVirtualStorage(subfolder: string, filename: string, content: string) {
+    const key = `rtk_file_${subfolder}_${filename}`;
+    // 1. Try IndexedDB first (no 5MB quota limit, supports large tile bundles)
     try {
-      const key = `rtk_file_${subfolder}_${filename}`;
-      localStorage.setItem(key, content);
+      const db = await this.getFileStorageDB();
+      const tx = db.transaction('files', 'readwrite');
+      tx.objectStore('files').put({
+        key,
+        subfolder,
+        filename,
+        content,
+        size: content.length,
+        updatedAt: Date.now(),
+      });
+    } catch {
+      // Fallback
+    }
 
+    // 2. Keep lightweight entry / index in localStorage
+    try {
+      if (content.length < 500000) {
+        localStorage.setItem(key, content);
+      }
       const indexKey = `rtk_filelist_${subfolder}`;
       const listStr = localStorage.getItem(indexKey);
       const list: string[] = listStr ? JSON.parse(listStr) : [];
@@ -363,8 +401,30 @@ class FileStorageService {
         localStorage.setItem(indexKey, JSON.stringify(list));
       }
     } catch (e) {
-      console.warn('Virtual storage write:', e);
+      console.warn('Virtual storage write index:', e);
     }
+  }
+
+  private async readFromVirtualStorageAsync(subfolder: string, filename: string): Promise<string | null> {
+    const key = `rtk_file_${subfolder}_${filename}`;
+    // 1. Try IndexedDB
+    try {
+      const db = await this.getFileStorageDB();
+      const result = await new Promise<any>((resolve) => {
+        const tx = db.transaction('files', 'readonly');
+        const req = tx.objectStore('files').get(key);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      });
+      if (result && result.content) {
+        return result.content;
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2. Fallback to localStorage
+    return localStorage.getItem(key);
   }
 
   private readFromVirtualStorage(subfolder: string, filename: string): string | null {
@@ -392,8 +452,16 @@ class FileStorageService {
     }
   }
 
-  private deleteFromVirtualStorage(subfolder: string, filename: string) {
+  private async deleteFromVirtualStorage(subfolder: string, filename: string) {
     const key = `rtk_file_${subfolder}_${filename}`;
+    try {
+      const db = await this.getFileStorageDB();
+      const tx = db.transaction('files', 'readwrite');
+      tx.objectStore('files').delete(key);
+    } catch {
+      // ignore
+    }
+
     localStorage.removeItem(key);
 
     const indexKey = `rtk_filelist_${subfolder}`;

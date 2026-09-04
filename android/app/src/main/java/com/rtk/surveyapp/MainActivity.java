@@ -30,7 +30,7 @@ public class MainActivity extends BridgeActivity {
         // 1. Immediately request all Native Android GNSS, Sensors & Storage Permissions on App Startup
         checkAndRequestNativePermissions();
 
-        // 2. Ensure /storage/emulated/0/com.rtkprogect.files directory structure exists
+        // 2. Ensure /storage/emulated/0/com.rtkproject.files directory structure exists
         createAppStorageDirectories();
 
         // 3. Configure WebView to grant all Geolocation Permissions automatically without silent blocks
@@ -65,7 +65,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * Create the mandatory persistence directory tree under /storage/emulated/0/com.rtkprogect.files:
+     * Create the mandatory persistence directory tree under /storage/emulated/0/com.rtkproject.files:
      * - point/
      * - track/
      * - project/
@@ -75,7 +75,7 @@ public class MainActivity extends BridgeActivity {
         try {
             File externalRoot = Environment.getExternalStorageDirectory();
             if (externalRoot != null && externalRoot.canWrite()) {
-                File appRoot = new File(externalRoot, "com.rtkprogect.files");
+                File appRoot = new File(externalRoot, "com.rtkproject.files");
                 if (!appRoot.exists()) {
                     appRoot.mkdirs();
                 }
@@ -147,7 +147,7 @@ public class MainActivity extends BridgeActivity {
             );
         }
 
-        // Android 11+ (API 30+) MANAGE_EXTERNAL_STORAGE check for direct access to /storage/emulated/0/com.rtkprogect.files
+        // Android 11+ (API 30+) MANAGE_EXTERNAL_STORAGE check for direct access to /storage/emulated/0/com.rtkproject.files
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
                 try {

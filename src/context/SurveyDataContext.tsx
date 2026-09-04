@@ -8,15 +8,17 @@ import {
   SurveyLogRecord,
   UnitSettings,
 } from '../types';
-import { latLonToGauss, haversineDistance } from '../utils/geodesy';
+import { latLonToGauss, gaussToLatLon, haversineDistance } from '../utils/geodesy';
 import { soundService } from '../utils/sound';
 import { fileStorageService } from '../utils/fileStorageService';
 import { exportTrackToGPX, exportPointsToCSV, exportPointsToCASS } from '../utils/exportImport';
+import { backgroundTrackingService } from '../utils/backgroundTrackingService';
 
 export interface ActiveRecordingState {
   isRecording: boolean;
   name: string;
   startTime: string;
+  startTimeMs?: number;
   points: TrackPoint[];
   distance: number; // in meters
   elapsedSeconds: number;
@@ -90,35 +92,61 @@ export function generateTimePointName(existingPoints: SurveyPoint[]): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
-  const prefix = `point${yyyy}.${mm}${dd}_`;
+  const dateStr = `${yyyy}${mm}${dd}`;
+  const prefix = `point${dateStr}_`;
 
-  const todaysPoints = existingPoints.filter((p) => p.name.startsWith(prefix));
   let maxSeq = 0;
-  todaysPoints.forEach((p) => {
-    const numPart = parseInt(p.name.replace(prefix, ''), 10);
-    if (!isNaN(numPart) && numPart > maxSeq) {
-      maxSeq = numPart;
+  existingPoints.forEach((p) => {
+    if (!p.name) return;
+    if (p.name.startsWith(prefix)) {
+      const numPart = parseInt(p.name.replace(prefix, ''), 10);
+      if (!isNaN(numPart) && numPart > maxSeq) {
+        maxSeq = numPart;
+      }
+    } else {
+      const match = p.name.match(/^point\d{8}_(\d+)$/);
+      if (match && p.name.includes(dateStr)) {
+        const numPart = parseInt(match[1], 10);
+        if (!isNaN(numPart) && numPart > maxSeq) {
+          maxSeq = numPart;
+        }
+      }
     }
   });
 
-  const nextSeq = String(maxSeq + 1).padStart(2, '0');
+  const nextSeq = String(maxSeq + 1).padStart(4, '0');
   return `${prefix}${nextSeq}`;
 }
 
 export function generateTimeTrackName(existingTracks: SurveyTrack[]): string {
-  const dateSlug = generateDateSlug('');
-  const prefix = `track${dateSlug}_`;
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const dateStr = `${yyyy}${mm}${dd}`;
+  const prefix = `track${dateStr}_`;
 
-  const todaysTracks = existingTracks.filter((t) => t.name.startsWith(prefix));
   let maxSeq = 0;
-  todaysTracks.forEach((t) => {
-    const numPart = parseInt(t.name.replace(prefix, ''), 10);
-    if (!isNaN(numPart) && numPart > maxSeq) {
-      maxSeq = numPart;
+  existingTracks.forEach((t) => {
+    if (!t.name) return;
+    if (t.name.startsWith(prefix)) {
+      const numPart = parseInt(t.name.replace(prefix, ''), 10);
+      if (!isNaN(numPart) && numPart > maxSeq) {
+        maxSeq = numPart;
+      }
+    } else {
+      const match = t.name.match(/^track\d{8}_(\d+)$/);
+      if (match && t.name.includes(dateStr)) {
+        const numPart = parseInt(match[1], 10);
+        if (!isNaN(numPart) && numPart > maxSeq) {
+          maxSeq = numPart;
+        }
+      }
     }
   });
 
-  return `${prefix}${maxSeq + 1}`;
+  const nextSeq = String(maxSeq + 1).padStart(4, '0');
+  return `${prefix}${nextSeq}`;
 }
 
 export function generateTimeProjectName(existingProjects: EngineeringProject[]): string {
@@ -126,35 +154,61 @@ export function generateTimeProjectName(existingProjects: EngineeringProject[]):
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
-  const prefix = `project${yyyy}.${mm}${dd}_`;
+  const dateStr = `${yyyy}${mm}${dd}`;
+  const prefix = `project${dateStr}_`;
 
-  const todaysProjects = existingProjects.filter((p) => p.name.startsWith(prefix));
   let maxSeq = 0;
-  todaysProjects.forEach((p) => {
-    const numPart = parseInt(p.name.replace(prefix, ''), 10);
-    if (!isNaN(numPart) && numPart > maxSeq) {
-      maxSeq = numPart;
+  existingProjects.forEach((p) => {
+    if (!p.name) return;
+    if (p.name.startsWith(prefix)) {
+      const numPart = parseInt(p.name.replace(prefix, ''), 10);
+      if (!isNaN(numPart) && numPart > maxSeq) {
+        maxSeq = numPart;
+      }
+    } else {
+      const match = p.name.match(/^project\d{8}_(\d+)$/);
+      if (match && p.name.includes(dateStr)) {
+        const numPart = parseInt(match[1], 10);
+        if (!isNaN(numPart) && numPart > maxSeq) {
+          maxSeq = numPart;
+        }
+      }
     }
   });
 
-  const nextSeq = String(maxSeq + 1).padStart(2, '0');
+  const nextSeq = String(maxSeq + 1).padStart(4, '0');
   return `${prefix}${nextSeq}`;
 }
 
 export function generateTimeRouteName(existingRoutes: SurveyRoute[]): string {
-  const dateSlug = generateDateSlug('');
-  const prefix = `route${dateSlug}_`;
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const dateStr = `${yyyy}${mm}${dd}`;
+  const prefix = `route${dateStr}_`;
 
-  const todaysRoutes = existingRoutes.filter((r) => r.name.startsWith(prefix));
   let maxSeq = 0;
-  todaysRoutes.forEach((r) => {
-    const numPart = parseInt(r.name.replace(prefix, ''), 10);
-    if (!isNaN(numPart) && numPart > maxSeq) {
-      maxSeq = numPart;
+  existingRoutes.forEach((r) => {
+    if (!r.name) return;
+    if (r.name.startsWith(prefix)) {
+      const numPart = parseInt(r.name.replace(prefix, ''), 10);
+      if (!isNaN(numPart) && numPart > maxSeq) {
+        maxSeq = numPart;
+      }
+    } else {
+      const match = r.name.match(/^route\d{8}_(\d+)$/);
+      if (match && r.name.includes(dateStr)) {
+        const numPart = parseInt(match[1], 10);
+        if (!isNaN(numPart) && numPart > maxSeq) {
+          maxSeq = numPart;
+        }
+      }
     }
   });
 
-  return `${prefix}${maxSeq + 1}`;
+  const nextSeq = String(maxSeq + 1).padStart(4, '0');
+  return `${prefix}${nextSeq}`;
 }
 
 function createDefaultProject(): EngineeringProject {
@@ -316,19 +370,33 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
   }, [activeRecording.isRecording]);
 
-  // Elapsed timer when recording
+  // Multi-tier keep-alive & elapsed timer when recording (Persistent in background/screen-off)
   useEffect(() => {
-    if (!activeRecording.isRecording) return;
-    const timer = setInterval(() => {
+    if (!activeRecording.isRecording) {
+      backgroundTrackingService.stop();
+      return;
+    }
+
+    const updateTimer = () => {
       setActiveRecording((prev) => {
         if (!prev.isRecording) return prev;
+        const now = Date.now();
+        const start = prev.startTimeMs || now;
+        const realElapsed = Math.max(0, Math.floor((now - start) / 1000));
         return {
           ...prev,
-          elapsedSeconds: prev.elapsedSeconds + 1,
+          elapsedSeconds: realElapsed,
         };
       });
-    }, 1000);
-    return () => clearInterval(timer);
+    };
+
+    backgroundTrackingService.start(updateTimer);
+    const timer = setInterval(updateTimer, 1000);
+
+    return () => {
+      backgroundTrackingService.stop(updateTimer);
+      clearInterval(timer);
+    };
   }, [activeRecording.isRecording]);
 
   // Save active recording state to localStorage
@@ -341,7 +409,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     soundService.setEnabled(unitSettings.audioBeep);
   }, [unitSettings.audioBeep]);
 
-  // Persist storage & mirror to /storage/emulated/0/com.rtkprogect.files/
+  // Persist storage & mirror to /storage/emulated/0/com.rtkproject.files/
   useEffect(() => {
     localStorage.setItem('rtk_projects', JSON.stringify(projects));
     // Auto-save projects backup
@@ -354,7 +422,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     localStorage.setItem('rtk_points', JSON.stringify(points));
-    // Persist current project point library in /storage/emulated/0/com.rtkprogect.files/point/
+    // Persist current project point library in /storage/emulated/0/com.rtkproject.files/point/
     if (points.length > 0) {
       fileStorageService.saveFile('point', `${currentProject.name}_points.json`, JSON.stringify(points, null, 2), 'application/json').catch(() => {});
       const summaryTxt = points.map((p, idx) => 
@@ -421,7 +489,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setPoints((prev) => [newPoint, ...prev]);
       soundService.playPointSaved();
 
-      // Immediately persist point file to /storage/emulated/0/com.rtkprogect.files/point/
+      // Immediately persist point file to /storage/emulated/0/com.rtkproject.files/point/
       const pointRecordTxt = [
         `点名: ${newPoint.name}`,
         `编码: ${newPoint.code || 'GPS'}`,
@@ -487,32 +555,60 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       let count = 0;
       const formattedPoints: SurveyPoint[] = [];
       const now = new Date();
-      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-        now.getDate()
-      ).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
-        2,
-        '0'
-      )}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const dateStr = `${yyyy}-${mm}-${dd} ${String(now.getHours()).padStart(2, '0')}:${String(
+        now.getMinutes()
+      ).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const ptPrefix = `point${yyyy}${mm}${dd}_`;
+
+      let currentSeq = 0;
+      const existingNames = new Set<string>();
+      points.forEach((p) => {
+        if (!p.name) return;
+        existingNames.add(p.name.trim().toLowerCase());
+        if (p.name.startsWith(ptPrefix)) {
+          const num = parseInt(p.name.replace(ptPrefix, ''), 10);
+          if (!isNaN(num) && num > currentSeq) currentSeq = num;
+        }
+      });
 
       newPoints.forEach((p, idx) => {
-        let lat = p.lat || 30.62402372;
-        let lon = p.lon || 114.26778222;
+        let lat = p.lat || 0;
+        let lon = p.lon || 0;
         let x = p.x || 0;
         let y = p.y || 0;
 
         if (x !== 0 && y !== 0 && (lat === 0 || isNaN(lat))) {
-          const gaussCalc = latLonToGauss(lat, lon, currentProject.centralMeridian, currentProject.coordSystem);
-          x = gaussCalc.x;
-          y = gaussCalc.y;
+          // Plane coordinates (X, Y) provided without Lat/Lon (e.g. CASS DAT or plane survey TXT)
+          const geo = gaussToLatLon(x, y, currentProject.centralMeridian, currentProject.coordSystem);
+          lat = geo.lat;
+          lon = geo.lon;
         } else if (lat !== 0 && lon !== 0 && (x === 0 || isNaN(x))) {
+          // Geodetic coordinates (Lat, Lon) provided without X/Y
+          const gauss = latLonToGauss(lat, lon, currentProject.centralMeridian, currentProject.coordSystem);
+          x = gauss.x;
+          y = gauss.y;
+        } else if (lat === 0 && lon === 0 && x === 0 && y === 0) {
+          lat = 30.62402372;
+          lon = 114.26778222;
           const gauss = latLonToGauss(lat, lon, currentProject.centralMeridian, currentProject.coordSystem);
           x = gauss.x;
           y = gauss.y;
         }
 
+        let ptName = p.name?.trim();
+        // If name is absent, or already exists, or is generic placeholder PT_x:
+        if (!ptName || existingNames.has(ptName.toLowerCase())) {
+          currentSeq++;
+          ptName = `${ptPrefix}${String(currentSeq).padStart(4, '0')}`;
+        }
+        existingNames.add(ptName.toLowerCase());
+
         formattedPoints.push({
-          id: `pt_imp_${Date.now()}_${idx}`,
-          name: p.name || `PT_${idx + 1}`,
+          id: `pt_imp_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+          name: ptName,
           code: p.code || 'IMP',
           lat,
           lon,
@@ -534,7 +630,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setPoints((prev) => [...formattedPoints, ...prev]);
       return count;
     },
-    [currentProject]
+    [currentProject, points]
   );
 
   const addRoute = useCallback(
@@ -571,7 +667,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
     setTracks((prev) => [newTrack, ...prev]);
 
-    // Auto-save GPX and track data to /storage/emulated/0/com.rtkprogect.files/track/
+    // Auto-save GPX and track data to /storage/emulated/0/com.rtkproject.files/track/
     const gpx = exportTrackToGPX(newTrack);
     fileStorageService.saveFile('track', `${newTrack.name}.gpx`, gpx, 'application/gpx+xml').catch(() => {});
     fileStorageService.saveFile('track', `${newTrack.name}.json`, JSON.stringify(newTrack, null, 2), 'application/json').catch(() => {});
@@ -620,6 +716,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         isRecording: true,
         name: trackName,
         startTime: dateStr,
+        startTimeMs: Date.now(),
         points: initialPoints,
         distance: 0,
         elapsedSeconds: 0,
@@ -702,7 +799,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     setTracks((prev) => [newTrack, ...prev]);
 
-    // Save as standard GPX format & JSON to /storage/emulated/0/com.rtkprogect.files/track/
+    // Save as standard GPX format & JSON to /storage/emulated/0/com.rtkproject.files/track/
     if (saveAsGPX) {
       const gpxContent = exportTrackToGPX(newTrack);
       fileStorageService.saveFile('track', `${newTrack.name}.gpx`, gpxContent, 'application/gpx+xml').catch(() => {});

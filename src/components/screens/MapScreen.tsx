@@ -20,6 +20,9 @@ import {
 import { soundService } from '../../utils/sound';
 import { offlineMapTileService } from '../../utils/offlineMapTileService';
 import { OfflineMapModal } from './OfflineMapModal';
+import { MapLayerType, getMapTileUrl, getBingQuadKey, getBaiduTileCoords } from '../../utils/mapTileUrls';
+export { getMapTileUrl };
+export type { MapLayerType };
 import {
   transformWgs84ToLayer,
   transformLayerToWgs84,
@@ -29,92 +32,14 @@ interface MapScreenProps {
   onBack?: () => void;
   onOpenStakeout?: () => void;
   onOpenMarkWaypoint?: () => void;
+  onOpenOfflineMap?: () => void;
 }
 
-export type MapLayerType =
-  | 'offline_grid'
-  | 'baidu_street'
-  | 'baidu_satellite'
-  | 'bing_satellite'
-  | 'bing_road'
-  | 'gaode_street'
-  | 'gaode_satellite'
-  | 'tianditu_satellite'
-  | 'esri_satellite'
-  | 'street'
-  | 'terrain';
-
-function getBingQuadKey(x: number, y: number, z: number): string {
-  let quadKey = '';
-  for (let i = z; i > 0; i--) {
-    let digit = 0;
-    const mask = 1 << (i - 1);
-    if ((x & mask) !== 0) digit += 1;
-    if ((y & mask) !== 0) digit += 2;
-    quadKey += digit.toString();
-  }
-  return quadKey;
-}
-
-// Convert standard Leaflet EPSG:3857 tile coordinates to Baidu Tile Grid Coordinates
-export function getBaiduTileCoords(x: number, y: number, z: number): { bx: number; by: number; bz: number } {
-  const zoomOffset = Math.pow(2, z - 1);
-  const bx = x - zoomOffset;
-  const by = zoomOffset - y - 1;
-  return { bx, by, bz: z };
-}
-
-// Helper to compute raw tile URL for any layer
-export function getMapTileUrl(layerId: string, x: number, y: number, z: number): string {
-  if (layerId === 'bing_satellite') {
-    const qk = getBingQuadKey(x, y, z);
-    const sub = Math.abs((x + y) % 4);
-    return `https://ecn.t${sub}.tiles.virtualearth.net/tiles/a${qk}.jpeg?g=1`;
-  }
-  if (layerId === 'bing_road') {
-    const qk = getBingQuadKey(x, y, z);
-    const sub = Math.abs((x + y) % 4);
-    return `https://ecn.t${sub}.tiles.virtualearth.net/tiles/r${qk}.jpeg?g=1&mkt=zh-cn`;
-  }
-  if (layerId === 'baidu_street') {
-    const { bx, by, bz } = getBaiduTileCoords(x, y, z);
-    const sub = Math.abs((x + y) % 4);
-    return `https://maponline${sub}.bdimg.com/tile/?qt=vtile&x=${bx}&y=${by}&z=${bz}&styles=pl&scaler=1&udt=20230519`;
-  }
-  if (layerId === 'baidu_satellite') {
-    const { bx, by, bz } = getBaiduTileCoords(x, y, z);
-    const sub = Math.abs((x + y) % 4);
-    return `https://maponline${sub}.bdimg.com/tile/?qt=vtile&x=${bx}&y=${by}&z=${bz}&styles=scl&scaler=1&udt=20230519`;
-  }
-  if (layerId === 'gaode_street') {
-    const sub = (Math.abs(x + y) % 4) + 1;
-    return `https://webrd0${sub}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=${x}&y=${y}&z=${z}`;
-  }
-  if (layerId === 'gaode_satellite') {
-    const sub = (Math.abs(x + y) % 4) + 1;
-    return `https://webst0${sub}.is.autonavi.com/appmaptile?style=6&x=${x}&y=${y}&z=${z}`;
-  }
-  if (layerId === 'tianditu_satellite') {
-    const sub = Math.abs(x + y) % 8;
-    return `https://t${sub}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX=${z}&TILEROW=${y}&TILECOL=${x}&tk=2b0de4726c5990263f35fe99fbfd0f3a`;
-  }
-  if (layerId === 'esri_satellite') {
-    return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
-  }
-  if (layerId === 'terrain') {
-    return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/${z}/${y}/${x}`;
-  }
-  // Default street (CartoDB)
-  const sub = ['a', 'b', 'c', 'd'][Math.abs(x + y) % 4];
-  return `https://${sub}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
-}
-
-// Custom Cached TileLayer that prioritizes IndexedDB offline cache
+// Custom Cached TileLayer that prioritizes com.rtkproject.files/mapdata/ and IndexedDB offline cache
 const CachedTileLayer = L.TileLayer.extend({
   createTile: function (coords: L.Coords, done: (error: Error | null, tile: HTMLImageElement) => void) {
     const tile = document.createElement('img');
     const layerId = this.options.layerId || 'bing_satellite';
-    const tileKey = offlineMapTileService.getTileKey(layerId, coords.z, coords.x, coords.y);
 
     L.DomEvent.on(tile, 'load', L.Util.bind((this as any)._tileOnLoad, this, done, tile));
     L.DomEvent.on(tile, 'error', L.Util.bind((this as any)._tileOnError, this, done, tile));
@@ -126,10 +51,10 @@ const CachedTileLayer = L.TileLayer.extend({
     tile.alt = '';
     tile.setAttribute('role', 'presentation');
 
-    // Check IndexedDB first
-    offlineMapTileService.getCachedTileUrl(tileKey).then((cachedObjectUrl) => {
-      if (cachedObjectUrl) {
-        tile.src = cachedObjectUrl;
+    // [USER REQ 3] Prioritize com.rtkproject.files/mapdata/ and IndexedDB; fallback to network download if not present
+    offlineMapTileService.getMapDataTileUrl(layerId, coords.z, coords.x, coords.y).then((localTileUrl) => {
+      if (localTileUrl) {
+        tile.src = localTileUrl;
       } else {
         tile.src = this.getTileUrl(coords);
       }
@@ -145,6 +70,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
   onBack,
   onOpenStakeout,
   onOpenMarkWaypoint,
+  onOpenOfflineMap,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -743,7 +669,11 @@ export const MapScreen: React.FC<MapScreenProps> = ({
         <button
           onClick={() => {
             soundService.playClick();
-            setShowOfflineModal(true);
+            if (onOpenOfflineMap) {
+              onOpenOfflineMap();
+            } else {
+              setShowOfflineModal(true);
+            }
           }}
           id="btn-map-offline-download"
           title="下载当前测区离线地图缓存至手机 (无网离线作业)"

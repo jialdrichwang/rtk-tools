@@ -108,6 +108,7 @@ export interface RTKState {
   heading: number; // 航向角 0-360
   speed: number; // m/s
   pressure: number; // 气压 hPa
+  hasBarometerSensor?: boolean; // 是否配置/连接了气压传感器
   temperature: number; // °C
   mode: 'simulated' | 'real_gps' | 'ntrip_cors' | 'ip_location' | 'bluetooth_gnss';
   screenRotation: 0 | 180;

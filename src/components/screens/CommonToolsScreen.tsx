@@ -12,8 +12,10 @@ import {
   Layers,
   Wrench,
   FileSpreadsheet,
+  FolderArchive,
 } from 'lucide-react';
 import { soundService } from '../../utils/sound';
+import { useRTK } from '../../context/RTKContext';
 
 interface CommonToolsScreenProps {
   onOpenCompass: () => void;
@@ -25,6 +27,7 @@ interface CommonToolsScreenProps {
   onOpenActivation: () => void;
   onOpenPointLibrary?: () => void;
   onOpenExportTrack?: () => void;
+  onOpenHistoryImport?: () => void;
 }
 
 export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
@@ -37,10 +40,22 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
   onOpenActivation,
   onOpenPointLibrary,
   onOpenExportTrack,
+  onOpenHistoryImport,
 }) => {
   const [activeCategory, setActiveCategory] = useState<'all' | 'data' | 'tool'>('all');
+  const { hasBarometerSensor, rtkState } = useRTK();
 
   const dataTools = [
+    {
+      id: 'history_data_import',
+      category: 'data',
+      title: '历史数据导入',
+      desc: '手动分类导入工程、点位、航迹、离线底图，低功耗进度管控',
+      icon: FolderArchive,
+      badge: '分类低耗导入',
+      color: 'text-amber-600 bg-amber-50 border-amber-200',
+      action: onOpenHistoryImport || (() => {}),
+    },
     {
       id: 'point_library',
       category: 'data',
@@ -75,7 +90,7 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
       id: 'export_track',
       category: 'data',
       title: '航线与航迹管理',
-      desc: '外业实时录制台账与KML/GPX/CSV/DAT导出',
+      desc: '外业实时录制台账与KML/GPX/CSV/DAT导出及转换',
       icon: Route,
       badge: '实时录制台账',
       color: 'text-teal-600 bg-teal-50 border-teal-200',
@@ -100,8 +115,8 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
       title: '气压测高计',
       desc: '实时大气压强与气压测高修正',
       icon: Gauge,
-      badge: '传感器',
-      color: 'text-amber-600 bg-amber-50 border-amber-200',
+      badge: hasBarometerSensor ? `${rtkState.pressure.toFixed(1)} hPa` : '未配置',
+      color: hasBarometerSensor ? 'text-amber-600 bg-amber-50 border-amber-200' : 'text-slate-500 bg-slate-50 border-slate-200',
       action: onOpenBarometer,
     },
     {

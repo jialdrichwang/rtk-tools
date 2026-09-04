@@ -41,6 +41,8 @@ interface RTKContextType {
   isNtripConnected: boolean;
   connectNtrip: () => Promise<boolean>;
   disconnectNtrip: () => void;
+  hasBarometerSensor: boolean;
+  setHasBarometerSensor: (has: boolean) => void;
 }
 
 const defaultNtripConfig: NtripConfig = {
@@ -71,6 +73,7 @@ const initialRTKState: RTKState = {
   heading: 182.5,
   speed: 0.0,
   pressure: 993.8,
+  hasBarometerSensor: false,
   temperature: 26.5,
   mode: 'simulated',
   screenRotation: 0,
@@ -85,17 +88,34 @@ const initialRTKState: RTKState = {
 const RTKContext = createContext<RTKContextType | undefined>(undefined);
 
 export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [hasBarometerSensor, setHasBarometerSensorState] = useState<boolean>(() => {
+    const saved = localStorage.getItem('rtk_has_barometer');
+    return saved === 'true';
+  });
+
   const [rtkState, setRtkState] = useState<RTKState>(() => {
     const saved = localStorage.getItem('rtk_toolkit_state');
+    const baroSaved = localStorage.getItem('rtk_has_barometer') === 'true';
     if (saved) {
       try {
-        return { ...initialRTKState, ...JSON.parse(saved), targetSamplingHz: 4 };
+        return {
+          ...initialRTKState,
+          ...JSON.parse(saved),
+          targetSamplingHz: 4,
+          hasBarometerSensor: baroSaved,
+        };
       } catch {
-        return initialRTKState;
+        return { ...initialRTKState, hasBarometerSensor: baroSaved };
       }
     }
-    return initialRTKState;
+    return { ...initialRTKState, hasBarometerSensor: baroSaved };
   });
+
+  const setHasBarometerSensor = useCallback((has: boolean) => {
+    localStorage.setItem('rtk_has_barometer', String(has));
+    setHasBarometerSensorState(has);
+    setRtkState((prev) => ({ ...prev, hasBarometerSensor: has }));
+  }, []);
 
   const [hasMagnetometer, setHasMagnetometer] = useState<boolean>(false);
   const [isUsingGpsHeading, setIsUsingGpsHeading] = useState<boolean>(true);
@@ -735,6 +755,8 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isNtripConnected,
         connectNtrip,
         disconnectNtrip,
+        hasBarometerSensor,
+        setHasBarometerSensor,
       }}
     >
       {children}

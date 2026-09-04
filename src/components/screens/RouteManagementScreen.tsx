@@ -28,6 +28,8 @@ import {
   Compass,
   Gauge,
   Calendar,
+  RotateCw,
+  FileUp,
 } from 'lucide-react';
 import { calculateDistanceAndAzimuth, haversineDistance } from '../../utils/geodesy';
 import {
@@ -40,6 +42,7 @@ import {
 } from '../../utils/exportImport';
 import { soundService } from '../../utils/sound';
 import { fileStorageService } from '../../utils/fileStorageService';
+import { TrackFileConvertModal } from '../tools/TrackFileConvertModal';
 
 interface RouteManagementScreenProps {
   onBack: () => void;
@@ -99,6 +102,10 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
   const [isReplaying, setIsReplaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState<1 | 2 | 5 | 10>(2);
 
+  // Track & Route File Conversion Modal State
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [trackToConvert, setTrackToConvert] = useState<SurveyTrack | null>(null);
+
   // Replay animation timer
   useEffect(() => {
     let replayTimer: NodeJS.Timeout;
@@ -152,7 +159,7 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
     }
 
     downloadFile(content, `${track.name}.${ext}`, mime);
-    // Also save converted file into /storage/emulated/0/com.rtkprogect.files/track/
+    // Also save converted file into /storage/emulated/0/com.rtkproject.files/track/
     await fileStorageService.saveFile('track', `${track.name}.${ext}`, content, mime).catch(() => {});
   };
 
@@ -428,15 +435,29 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
               </button>
             </div>
 
-            {selectedTrackIds.length > 0 && (
+            <div className="flex items-center gap-2">
               <button
-                onClick={handleDeleteSelectedTracks}
-                className="flex items-center gap-1 text-rose-600 hover:text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-md text-xs font-bold cursor-pointer"
+                onClick={() => {
+                  soundService.playClick();
+                  setTrackToConvert(null);
+                  setShowConvertModal(true);
+                }}
+                className="flex items-center gap-1 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-300 px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition shadow-2xs"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>批量删除 ({selectedTrackIds.length})</span>
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>文件转换与导入</span>
               </button>
-            )}
+
+              {selectedTrackIds.length > 0 && (
+                <button
+                  onClick={handleDeleteSelectedTracks}
+                  className="flex items-center gap-1 text-rose-600 hover:text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-md text-xs font-bold cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>批量删除 ({selectedTrackIds.length})</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Files List */}
@@ -521,7 +542,7 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
 
                     {/* Export Formats & Map View Bar */}
                     <div className="flex items-center justify-between pt-1 text-xs">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-[10px] text-slate-400 font-medium">导出:</span>
                         {(['CSV', 'KML', 'GPX', 'DAT', 'TXT'] as RecordFileFormat[]).map((fmt) => (
                           <button
@@ -532,11 +553,22 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
                             {fmt}
                           </button>
                         ))}
+                        <button
+                          onClick={() => {
+                            soundService.playClick();
+                            setTrackToConvert(tk);
+                            setShowConvertModal(true);
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-teal-50 hover:bg-teal-100 text-teal-700 text-[10px] font-bold border border-teal-300 flex items-center gap-0.5 cursor-pointer transition"
+                        >
+                          <RotateCw className="w-2.5 h-2.5" />
+                          <span>转换/复制</span>
+                        </button>
                       </div>
 
                       <button
                         onClick={onNavigateToMap}
-                        className="text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-0.5 text-[11px] cursor-pointer"
+                        className="text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-0.5 text-[11px] cursor-pointer shrink-0"
                       >
                         <span>在地图查看</span>
                         <ChevronRight className="w-3.5 h-3.5" />
@@ -952,6 +984,15 @@ export const RouteManagementScreen: React.FC<RouteManagementScreenProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Track & Route File Conversion Modal */}
+      {showConvertModal && (
+        <TrackFileConvertModal
+          isOpen={true}
+          initialTrack={trackToConvert}
+          onClose={() => setShowConvertModal(false)}
+        />
       )}
     </div>
   );

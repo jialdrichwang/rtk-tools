@@ -203,7 +203,7 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({ isOpen
                 value={customRootInput}
                 onChange={(e) => setCustomRootInput(e.target.value)}
                 className="w-full bg-white border border-blue-400 rounded-xl px-3 py-1.5 font-mono text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="/storage/emulated/0/com.rtkprogect.files"
+                placeholder="/storage/emulated/0/com.rtkproject.files"
               />
               <div className="flex items-center justify-end gap-2 text-xs">
                 <button
