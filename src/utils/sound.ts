@@ -160,6 +160,13 @@ class SoundService {
       // Ignore
     }
   }
+
+  /**
+   * Warning or error notification alert
+   */
+  public playAlert() {
+    this.playStatusAlert(false);
+  }
 }
 
 export const soundService = new SoundService();

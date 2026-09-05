@@ -1,1 +1,27 @@
 @import "tailwindcss";
+
+/* Custom prominent vertical scrollbar / slider styles to prevent tools from being obscured */
+.custom-vertical-slider::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-vertical-slider::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+.custom-vertical-slider::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+  border: 2px solid #f1f5f9;
+}
+
+.custom-vertical-slider::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Firefox support */
+.custom-vertical-slider {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}

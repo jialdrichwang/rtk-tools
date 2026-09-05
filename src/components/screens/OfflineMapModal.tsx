@@ -22,12 +22,159 @@ import {
   Sliders,
   PenTool,
   FolderArchive,
+  Clipboard,
+  Crosshair,
+  Sparkles,
+  FileText,
 } from 'lucide-react';
 import { offlineMapTileService, CacheRegionMeta } from '../../utils/offlineMapTileService';
 import { MapLayerType, getMapTileUrl } from '../../utils/mapTileUrls';
 import { useRTK } from '../../context/RTKContext';
 import { fileStorageService } from '../../utils/fileStorageService';
 import { soundService } from '../../utils/sound';
+
+export function parseBBoxFromTextContent(text: string, defaultName: string = '自定义选区') {
+  let minLat: number | null = null;
+  let minLon: number | null = null;
+  let maxLat: number | null = null;
+  let maxLon: number | null = null;
+  let regionTitle = defaultName;
+
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('内容为空，请输入有效的经纬度或JSON文本');
+  }
+
+  // 1. Try parsing JSON
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        if (parsed.length === 4 && typeof parsed[0] === 'number') {
+          const isLonFirst = Math.abs(parsed[0]) > 90 || Math.abs(parsed[2]) > 90;
+          if (isLonFirst) {
+            minLon = Math.min(parsed[0], parsed[2]);
+            maxLon = Math.max(parsed[0], parsed[2]);
+            minLat = Math.min(parsed[1], parsed[3]);
+            maxLat = Math.max(parsed[1], parsed[3]);
+          } else {
+            minLat = Math.min(parsed[0], parsed[2]);
+            maxLat = Math.max(parsed[0], parsed[2]);
+            minLon = Math.min(parsed[1], parsed[3]);
+            maxLon = Math.max(parsed[1], parsed[3]);
+          }
+        } else if (parsed.length >= 2 && Array.isArray(parsed[0]) && Array.isArray(parsed[1])) {
+          const p1 = parsed[0];
+          const p2 = parsed[1];
+          minLat = Math.min(Number(p1[0]), Number(p2[0]));
+          maxLat = Math.max(Number(p1[0]), Number(p2[0]));
+          minLon = Math.min(Number(p1[1]), Number(p2[1]));
+          maxLon = Math.max(Number(p1[1]), Number(p2[1]));
+        }
+      } else if (parsed.vertex1 && parsed.vertex2) {
+        const v1 = parsed.vertex1;
+        const v2 = parsed.vertex2;
+        minLat = Math.min(Number(v1.lat), Number(v2.lat));
+        maxLat = Math.max(Number(v1.lat), Number(v2.lat));
+        minLon = Math.min(Number(v1.lon ?? v1.lng), Number(v2.lon ?? v2.lng));
+        maxLon = Math.max(Number(v1.lon ?? v1.lng), Number(v2.lon ?? v2.lng));
+        if (parsed.name) regionTitle = parsed.name;
+      } else if (parsed.bbox && Array.isArray(parsed.bbox) && parsed.bbox.length >= 4) {
+        const b = parsed.bbox;
+        minLon = Math.min(Number(b[0]), Number(b[2]));
+        maxLon = Math.max(Number(b[0]), Number(b[2]));
+        minLat = Math.min(Number(b[1]), Number(b[3]));
+        maxLat = Math.max(Number(b[1]), Number(b[3]));
+        if (parsed.name) regionTitle = parsed.name;
+      } else if (parsed.minLat !== undefined && parsed.maxLat !== undefined) {
+        minLat = Number(parsed.minLat);
+        maxLat = Number(parsed.maxLat);
+        minLon = Number(parsed.minLon ?? parsed.minLng);
+        maxLon = Number(parsed.maxLon ?? parsed.maxLng);
+        if (parsed.name) regionTitle = parsed.name;
+      }
+    } catch {
+      // Continue to line parsing
+    }
+  }
+
+  // 2. Line by line or free text parsing
+  if (minLat === null) {
+    const lines = trimmed
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('//'));
+    const detectedPoints: { lat: number; lon: number }[] = [];
+
+    for (const line of lines) {
+      const parts = line.split(/[,;\s\t]+/).map((s) => s.trim()).filter(Boolean);
+      // Case A: 4 numbers on single line
+      if (parts.length >= 4) {
+        const n1 = parseFloat(parts[0]);
+        const n2 = parseFloat(parts[1]);
+        const n3 = parseFloat(parts[2]);
+        const n4 = parseFloat(parts[3]);
+        if (!isNaN(n1) && !isNaN(n2) && !isNaN(n3) && !isNaN(n4)) {
+          if (Math.abs(n1) > 90 || Math.abs(n3) > 90) {
+            minLon = Math.min(n1, n3);
+            maxLon = Math.max(n1, n3);
+            minLat = Math.min(n2, n4);
+            maxLat = Math.max(n2, n4);
+          } else {
+            minLat = Math.min(n1, n3);
+            maxLat = Math.max(n1, n3);
+            minLon = Math.min(n2, n4);
+            maxLon = Math.max(n2, n4);
+          }
+          if (parts[4]) {
+            regionTitle = parts.slice(4).join(' ').trim();
+          }
+          break;
+        }
+      }
+
+      // Case B: Points on multiple lines
+      const nums = parts.map((p) => parseFloat(p)).filter((n) => !isNaN(n));
+      if (nums.length >= 2) {
+        let lat = nums[0];
+        let lon = nums[1];
+        if (Math.abs(nums[0]) > 90 && Math.abs(nums[1]) <= 90) {
+          lon = nums[0];
+          lat = nums[1];
+        }
+        detectedPoints.push({ lat, lon });
+      }
+    }
+
+    if (minLat === null && detectedPoints.length >= 2) {
+      const lats = detectedPoints.map((p) => p.lat);
+      const lons = detectedPoints.map((p) => p.lon);
+      minLat = Math.min(...lats);
+      maxLat = Math.max(...lats);
+      minLon = Math.min(...lons);
+      maxLon = Math.max(...lons);
+    }
+  }
+
+  if (
+    minLat === null ||
+    minLon === null ||
+    maxLat === null ||
+    maxLon === null ||
+    isNaN(minLat) ||
+    isNaN(minLon) ||
+    isNaN(maxLat) ||
+    isNaN(maxLon)
+  ) {
+    throw new Error('未在内容中识别到有效的两顶点对角线经纬度坐标，请参照格式样例或直接输入');
+  }
+
+  if (minLat < -90 || maxLat > 90 || minLon < -180 || maxLon > 180) {
+    throw new Error('经纬度数值超出有效范围 (-90~90, -180~180)');
+  }
+
+  return { minLat, minLon, maxLat, maxLon, regionTitle };
+}
 
 export interface OfflineMapModalProps {
   isOpen?: boolean;
@@ -191,12 +338,37 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
   const [customRegionName, setCustomRegionName] = useState<string>('自定义选区底图');
   const [customFileError, setCustomFileError] = useState<string | null>(null);
   const [showSampleHelp, setShowSampleHelp] = useState<boolean>(false);
-  const [customInputMode, setCustomInputMode] = useState<'upload' | 'manual'>('upload');
+  const [customInputMode, setCustomInputMode] = useState<'upload' | 'paste' | 'manual' | 'gps' | 'preset'>('upload');
+  const [pasteContent, setPasteContent] = useState<string>('');
+  const [gpsRadiusKm, setGpsRadiusKm] = useState<number>(2);
   const [manualV1Lat, setManualV1Lat] = useState('39.780000');
   const [manualV1Lon, setManualV1Lon] = useState('116.450000');
   const [manualV2Lat, setManualV2Lat] = useState('39.920000');
   const [manualV2Lon, setManualV2Lon] = useState('116.620000');
   const [manualRegionTitle, setManualRegionTitle] = useState('自定义高精测区');
+
+  const parseAndApplyBBoxText = (text: string, sourceName: string) => {
+    try {
+      const parsed = parseBBoxFromTextContent(text, sourceName);
+      setCustomBBox({
+        minLat: parsed.minLat,
+        minLon: parsed.minLon,
+        maxLat: parsed.maxLat,
+        maxLon: parsed.maxLon,
+        fileName: sourceName,
+        description: parsed.regionTitle,
+      });
+      setCustomRegionName(parsed.regionTitle);
+      setCustomFileError(null);
+      soundService.playSuccess();
+      setNotificationMsg(`已成功设定自定义选区：${parsed.regionTitle}`);
+      return true;
+    } catch (err: any) {
+      setCustomFileError(err.message || '选区解析失败，请检查数据格式');
+      soundService.playAlert();
+      return false;
+    }
+  };
 
   const handleApplyManualVertices = () => {
     const v1Lat = parseFloat(manualV1Lat);
@@ -224,6 +396,105 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
     setCustomFileError(null);
     soundService.playSuccess();
     setNotificationMsg(`已成功设定自定义对角选区：${manualRegionTitle}`);
+  };
+
+  const handlePasteParse = () => {
+    soundService.playClick();
+    if (!pasteContent.trim()) {
+      setCustomFileError('请先粘贴或输入坐标文本、对角点或JSON数据');
+      return;
+    }
+    parseAndApplyBBoxText(pasteContent, manualRegionTitle || '粘贴选区');
+  };
+
+  const handleClipboardRead = async () => {
+    soundService.playClick();
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          setPasteContent(text);
+          parseAndApplyBBoxText(text, '剪贴板选区');
+          return;
+        }
+      }
+      setCustomFileError('未从剪贴板读取到有效内容，请直接在文本框长按粘贴');
+    } catch {
+      setCustomFileError('浏览器限制直接访问剪贴板，请长按下方输入框进行粘贴');
+    }
+  };
+
+  const handleGpsCenterApply = (radiusKm: number) => {
+    soundService.playClick();
+    const lat = centerLat || 39.9042;
+    const lon = centerLon || 116.4074;
+    const dLat = radiusKm / 111.32;
+    const dLon = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+
+    const minLat = Number((lat - dLat).toFixed(6));
+    const maxLat = Number((lat + dLat).toFixed(6));
+    const minLon = Number((lon - dLon).toFixed(6));
+    const maxLon = Number((lon + dLon).toFixed(6));
+    const title = `GPS中心扩展${radiusKm}km测区`;
+
+    setCustomBBox({
+      minLat,
+      minLon,
+      maxLat,
+      maxLon,
+      fileName: `${title}.txt`,
+      description: title,
+    });
+    setCustomRegionName(title);
+    setCustomFileError(null);
+    soundService.playSuccess();
+    setNotificationMsg(`已以当前定位为中心生成 ±${radiusKm}km 对角选区`);
+  };
+
+  const handlePresetApply = (p: { name: string; minLat: number; minLon: number; maxLat: number; maxLon: number }) => {
+    soundService.playClick();
+    setCustomBBox({
+      minLat: p.minLat,
+      minLon: p.minLon,
+      maxLat: p.maxLat,
+      maxLon: p.maxLon,
+      fileName: `${p.name}.txt`,
+      description: p.name,
+    });
+    setCustomRegionName(p.name);
+    setCustomFileError(null);
+    soundService.playSuccess();
+    setNotificationMsg(`已应用预设测区：${p.name}`);
+  };
+
+  const handleShowOpenFilePicker = async () => {
+    try {
+      if (typeof window !== 'undefined' && (window as any).showOpenFilePicker) {
+        const [fileHandle] = await (window as any).showOpenFilePicker({
+          types: [
+            {
+              description: '测区选区对角线数据文件',
+              accept: {
+                'text/plain': ['.txt', '.csv', '.dat'],
+                'application/json': ['.json', '.geojson'],
+              },
+            },
+          ],
+        });
+        const file = await fileHandle.getFile();
+        const text = await file.text();
+        const success = parseAndApplyBBoxText(text, file.name);
+        if (success) {
+          await fileStorageService
+            .saveFile('mapdata', file.name, text, file.type || 'text/plain')
+            .catch(() => {});
+        }
+      }
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        console.warn('showOpenFilePicker error:', e);
+      }
+    }
   };
 
   // Download & storage state
@@ -805,99 +1076,11 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
       const text = event.target?.result as string;
       if (!text) return;
 
-      try {
-        let minLat: number | null = null;
-        let minLon: number | null = null;
-        let maxLat: number | null = null;
-        let maxLon: number | null = null;
-        let regionTitle = file.name.replace(/\.[^/.]+$/, '');
-
-        // 1. Try parsing JSON
-        if (file.name.endsWith('.json') || text.trim().startsWith('{')) {
-          const parsed = JSON.parse(text);
-          if (parsed.vertex1 && parsed.vertex2) {
-            const v1 = parsed.vertex1;
-            const v2 = parsed.vertex2;
-            minLat = Math.min(Number(v1.lat), Number(v2.lat));
-            maxLat = Math.max(Number(v1.lat), Number(v2.lat));
-            minLon = Math.min(Number(v1.lon ?? v1.lng), Number(v2.lon ?? v2.lng));
-            maxLon = Math.max(Number(v1.lon ?? v1.lng), Number(v2.lon ?? v2.lng));
-          } else if (parsed.bbox && Array.isArray(parsed.bbox) && parsed.bbox.length >= 4) {
-            const b = parsed.bbox;
-            minLat = Math.min(Number(b[1]), Number(b[3]));
-            maxLat = Math.max(Number(b[1]), Number(b[3]));
-            minLon = Math.min(Number(b[0]), Number(b[2]));
-            maxLon = Math.max(Number(b[0]), Number(b[2]));
-          } else if (parsed.minLat !== undefined && parsed.maxLat !== undefined) {
-            minLat = Number(parsed.minLat);
-            maxLat = Number(parsed.maxLat);
-            minLon = Number(parsed.minLon ?? parsed.minLng);
-            maxLon = Number(parsed.maxLon ?? parsed.maxLng);
-          }
-          if (parsed.name) regionTitle = parsed.name;
-        } else {
-          // 2. Parse TXT / CSV line by line
-          const lines = text.split('\n');
-          for (const rawLine of lines) {
-            const line = rawLine.trim();
-            if (!line || line.startsWith('#') || line.startsWith('//')) continue;
-
-            const parts = line.split(/[,;\s\t]+/).map((s) => s.trim());
-            if (parts.length >= 4) {
-              const num1 = parseFloat(parts[0]);
-              const num2 = parseFloat(parts[1]);
-              const num3 = parseFloat(parts[2]);
-              const num4 = parseFloat(parts[3]);
-
-              if (!isNaN(num1) && !isNaN(num2) && !isNaN(num3) && !isNaN(num4)) {
-                minLat = Math.min(num1, num3);
-                maxLat = Math.max(num1, num3);
-                minLon = Math.min(num2, num4);
-                maxLon = Math.max(num2, num4);
-
-                if (parts[4]) {
-                  regionTitle = parts.slice(4).join(' ').trim();
-                }
-                break;
-              }
-            }
-          }
-        }
-
-        if (
-          minLat === null ||
-          minLon === null ||
-          maxLat === null ||
-          maxLon === null ||
-          isNaN(minLat) ||
-          isNaN(minLon) ||
-          isNaN(maxLat) ||
-          isNaN(maxLon)
-        ) {
-          throw new Error('未在文件中识别到有效的两顶点对角线经纬度坐标，请参照格式样例文档。');
-        }
-
-        if (minLat < -90 || maxLat > 90 || minLon < -180 || maxLon > 180) {
-          throw new Error('经纬度数值超出地球有效范围 (-90~90, -180~180)，请确认数据格式。');
-        }
-
-        setCustomBBox({
-          minLat,
-          minLon,
-          maxLat,
-          maxLon,
-          fileName: file.name,
-          description: regionTitle,
-        });
-        setCustomRegionName(regionTitle);
-        setCustomFileError(null);
-
+      const success = parseAndApplyBBoxText(text, file.name);
+      if (success) {
         await fileStorageService
           .saveFile('mapdata', file.name, text, file.type || 'text/plain')
           .catch((err) => console.warn('Save custom area file to mapdata error:', err));
-      } catch (err: any) {
-        setCustomFileError(err.message || '选区文件解析失败');
-        setCustomBBox(null);
       }
     };
     reader.readAsText(file);
@@ -1548,20 +1731,33 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
                     )}
                   </div>
 
-                  {/* Custom File / Manual Mode Tabs */}
-                  <div className="flex rounded-xl bg-slate-200/80 p-1 text-[11px] font-bold">
+                  {/* Custom Input Mode Tabs (5-in-1 multi-method guarantees 100% usability on all phones) */}
+                  <div className="grid grid-cols-5 gap-1 rounded-xl bg-slate-200/80 p-1 text-[11px] font-bold">
                     <button
                       type="button"
                       onClick={() => {
                         soundService.playClick();
                         setCustomInputMode('upload');
                       }}
-                      className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition ${
+                      className={`py-1.5 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer transition ${
                         customInputMode === 'upload' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600'
                       }`}
                     >
                       <FolderDown className="w-3.5 h-3.5" />
-                      <span>手机文件管理器选取</span>
+                      <span className="text-[10px]">文件选取</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundService.playClick();
+                        setCustomInputMode('paste');
+                      }}
+                      className={`py-1.5 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer transition ${
+                        customInputMode === 'paste' ? 'bg-white text-amber-700 shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      <Clipboard className="w-3.5 h-3.5" />
+                      <span className="text-[10px]">剪贴板粘贴</span>
                     </button>
                     <button
                       type="button"
@@ -1569,64 +1765,154 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
                         soundService.playClick();
                         setCustomInputMode('manual');
                       }}
-                      className={`flex-1 py-1.5 rounded-lg flex items-center justify-center gap-1 cursor-pointer transition ${
+                      className={`py-1.5 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer transition ${
                         customInputMode === 'manual' ? 'bg-white text-purple-700 shadow-xs' : 'text-slate-600'
                       }`}
                     >
                       <PenTool className="w-3.5 h-3.5" />
-                      <span>直接输入两顶点坐标</span>
+                      <span className="text-[10px]">两点输入</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundService.playClick();
+                        setCustomInputMode('gps');
+                      }}
+                      className={`py-1.5 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer transition ${
+                        customInputMode === 'gps' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      <Crosshair className="w-3.5 h-3.5" />
+                      <span className="text-[10px]">当前GPS</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundService.playClick();
+                        setCustomInputMode('preset');
+                      }}
+                      className={`py-1.5 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer transition ${
+                        customInputMode === 'preset' ? 'bg-white text-rose-700 shadow-xs' : 'text-slate-600'
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span className="text-[10px]">测区预设</span>
                     </button>
                   </div>
 
-                  {customInputMode === 'upload' ? (
-                    /* File Upload Trigger (100% Reliable Native Mobile Button) */
-                    <div
-                      onClick={() => {
-                        soundService.playClick();
-                        if (fileInputRef.current) {
-                          fileInputRef.current.click();
-                        }
-                      }}
-                      className="relative block border-2 border-dashed border-blue-300 hover:border-blue-500 bg-blue-50/30 hover:bg-blue-50/70 rounded-2xl p-4 text-center cursor-pointer transition-all shadow-2xs select-auto group"
-                    >
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="*/*,.txt,.json,.csv,.geojson,text/plain,application/json"
-                        onChange={handleFileChange}
-                        onClick={(e) => {
-                          (e.target as HTMLInputElement).value = '';
-                        }}
-                        className="hidden"
-                      />
-                      <Upload className="w-7 h-7 mx-auto text-blue-600 mb-1 group-hover:scale-110 transition-transform" />
-                      <span className="font-bold text-slate-900 block text-xs">
-                        {customBBox ? `已选选区文件: ${customBBox.description || customBBox.fileName}` : '选取对角两顶点文件 (.txt / .json / .csv)'}
-                      </span>
-                      <span className="text-[10px] text-slate-500 mt-0.5 block">
-                        自动镜像存入手持机目录 <span className="font-mono text-slate-700">com.rtkproject.files/mapdata</span>
-                      </span>
+                  {/* Mode 1: Mobile Native File Picker */}
+                  {customInputMode === 'upload' && (
+                    <div className="space-y-2">
+                      <div className="relative block border-2 border-dashed border-blue-400 bg-blue-50/40 rounded-2xl p-4 text-center cursor-pointer transition-all shadow-2xs group overflow-hidden">
+                        {/* Direct full-card native touch target without display:none */}
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".txt,.json,.csv,.dat,.geojson,text/plain,application/json"
+                          onChange={handleFileChange}
+                          onClick={(e) => {
+                            (e.target as HTMLInputElement).value = '';
+                          }}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
+                          style={{ fontSize: '100px' }}
+                        />
+                        <Upload className="w-7 h-7 mx-auto text-blue-600 mb-1 group-hover:scale-110 transition-transform pointer-events-none" />
+                        <span className="font-bold text-slate-900 block text-xs pointer-events-none">
+                          {customBBox ? `已选选区: ${customBBox.description || customBBox.fileName}` : '点击整张卡片任意处选取文件'}
+                        </span>
+                        <span className="text-[10px] text-slate-500 mt-0.5 block pointer-events-none">
+                          支持 .txt / .json / .csv / .dat / .geojson (自动解析对角线)
+                        </span>
 
-                      {/* Prominent tactile action button for mobile touch screens */}
-                      <div className="pt-2">
+                        <div className="pt-2 pointer-events-none">
+                          <div className="px-4 py-2 bg-blue-600 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5">
+                            <FolderDown className="w-4 h-4" />
+                            <span>点击打开手机文件选择器</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Visible native file picker fallback */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-2.5">
+                        <div className="text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                          <span>备用：系统原生选择框 (强兼容模式)</span>
+                          <span className="text-[10px] text-blue-600">直接调用浏览器系统组件</span>
+                        </div>
+                        <input
+                          type="file"
+                          accept=".txt,.json,.csv,.dat,.geojson,text/plain,application/json"
+                          onChange={handleFileChange}
+                          onClick={(e) => {
+                            (e.target as HTMLInputElement).value = '';
+                          }}
+                          className="block w-full text-xs text-slate-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                        />
+                      </div>
+
+                      {typeof window !== 'undefined' && 'showOpenFilePicker' in window && (
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            soundService.playClick();
-                            if (fileInputRef.current) {
-                              fileInputRef.current.click();
-                            }
-                          }}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer transition-all"
+                          onClick={handleShowOpenFilePicker}
+                          className="w-full py-2 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 flex items-center justify-center gap-1.5 cursor-pointer transition"
                         >
-                          <FolderDown className="w-4 h-4" />
-                          <span>点击打开手机文件选择器</span>
+                          <FileText className="w-4 h-4 text-blue-600" />
+                          <span>调用系统文件窗口 (File System API)</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Mode 2: Clipboard / Text Paste */}
+                  {customInputMode === 'paste' && (
+                    <div className="bg-white border border-amber-200 rounded-2xl p-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-amber-900 text-xs flex items-center gap-1.5">
+                          <Clipboard className="w-3.5 h-3.5 text-amber-600" />
+                          <span>从剪贴板或文本框直接粘贴数据</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleClipboardRead}
+                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-[11px] rounded-lg shadow-2xs flex items-center gap-1 cursor-pointer transition"
+                        >
+                          <Clipboard className="w-3.5 h-3.5" />
+                          <span>从系统剪贴板读取</span>
+                        </button>
+                      </div>
+
+                      <textarea
+                        rows={3}
+                        value={pasteContent}
+                        onChange={(e) => setPasteContent(e.target.value)}
+                        placeholder={`支持以下格式：\n1. 纯数字: 39.78, 116.45, 39.92, 116.62\n2. 经纬度行: 39.78 116.45 回车 39.92 116.62\n3. JSON: { "vertex1": { "lat": 39.78, "lon": 116.45 }, "vertex2": { "lat": 39.92, "lon": 116.62 } }`}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPasteContent(
+                              '39.780000, 116.450000, 39.920000, 116.620000, 北京亦庄高精测区'
+                            )
+                          }
+                          className="text-[11px] text-amber-700 hover:underline cursor-pointer"
+                        >
+                          填入标准样例
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handlePasteParse}
+                          className="ml-auto px-4 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition"
+                        >
+                          解析并应用测区
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    /* Manual Coordinate Inputs - Guarantees 100% usability even without file picker permissions */
+                  )}
+
+                  {/* Mode 3: Manual 2-vertex inputs */}
+                  {customInputMode === 'manual' && (
                     <div className="bg-white border border-purple-200 rounded-2xl p-3 space-y-2.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-bold text-purple-900 flex items-center gap-1">
@@ -1700,6 +1986,94 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
                         >
                           设定选区范围
                         </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mode 4: Current GPS center extension */}
+                  {customInputMode === 'gps' && (
+                    <div className="bg-white border border-emerald-200 rounded-2xl p-3 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-emerald-900 flex items-center gap-1.5">
+                          <Crosshair className="w-4 h-4 text-emerald-600" />
+                          <span>以当前设备/RTK中心点扩展选区</span>
+                        </span>
+                        <span className="text-[10px] font-mono text-emerald-700">
+                          [{centerLat ? centerLat.toFixed(5) : '39.90420'}°, {centerLon ? centerLon.toFixed(5) : '116.40740'}°]
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {[
+                          { km: 1, label: '±1 km', desc: '4 km²' },
+                          { km: 2, label: '±2 km', desc: '16 km²' },
+                          { km: 5, label: '±5 km', desc: '100 km²' },
+                          { km: 10, label: '±10 km', desc: '400 km²' },
+                        ].map((item) => (
+                          <button
+                            key={item.km}
+                            type="button"
+                            onClick={() => {
+                              setGpsRadiusKm(item.km);
+                              handleGpsCenterApply(item.km);
+                            }}
+                            className={`p-2 rounded-xl border text-center transition cursor-pointer ${
+                              gpsRadiusKm === item.km
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                            }`}
+                          >
+                            <div className="text-xs font-bold">{item.label}</div>
+                            <div className={`text-[9px] ${gpsRadiusKm === item.km ? 'text-emerald-100' : 'text-slate-400'}`}>
+                              {item.desc}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleGpsCenterApply(gpsRadiusKm)}
+                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
+                      >
+                        <Crosshair className="w-4 h-4" />
+                        <span>以当前坐标生成 ±{gpsRadiusKm}km 测区选区</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Mode 5: Fast Presets */}
+                  {customInputMode === 'preset' && (
+                    <div className="bg-white border border-rose-200 rounded-2xl p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-rose-900 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-rose-600" />
+                          <span>常用示范工程测区预设 (一键载入)</span>
+                        </span>
+                        <span className="text-[10px] text-rose-600">点击即应用</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { name: '北京亦庄高精测区', minLat: 39.78, minLon: 116.45, maxLat: 39.92, maxLon: 116.62 },
+                          { name: '上海临港新片区', minLat: 30.85, minLon: 121.85, maxLat: 31.05, maxLon: 122.05 },
+                          { name: '广州黄埔科学城', minLat: 23.10, minLon: 113.40, maxLat: 23.25, maxLon: 113.55 },
+                          { name: '深圳前海深港合作区', minLat: 22.50, minLon: 113.88, maxLat: 22.62, maxLon: 113.98 },
+                          { name: '成都天府新区核心区', minLat: 30.40, minLon: 104.00, maxLat: 30.55, maxLon: 104.15 },
+                          { name: '武汉光谷生物城', minLat: 30.45, minLon: 114.45, maxLat: 30.58, maxLon: 114.60 },
+                        ].map((p) => (
+                          <button
+                            key={p.name}
+                            type="button"
+                            onClick={() => handlePresetApply(p)}
+                            className="p-2 bg-slate-50 hover:bg-rose-50 border border-slate-200 hover:border-rose-300 rounded-xl text-left cursor-pointer transition"
+                          >
+                            <div className="text-xs font-bold text-slate-800">{p.name}</div>
+                            <div className="text-[9px] font-mono text-slate-500 mt-0.5">
+                              [{p.minLat}, {p.minLon}] ~ [{p.maxLat}, {p.maxLon}]
+                            </div>
+                          </button>
+                        ))}
                       </div>
                     </div>
                   )}
@@ -1870,41 +2244,41 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
           ) : (
             /* Tab 2: Manage Saved Regions */
             <div className="space-y-3">
-              <input
-                ref={tilepackInputRef}
-                type="file"
-                accept=".tilepack,.json"
-                onChange={handleTilepackFileChange}
-                onClick={(e) => {
-                  (e.target as HTMLInputElement).value = '';
-                }}
-                className="hidden"
-              />
-
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-emerald-900 font-bold text-xs">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                     <span>持久化瓦片包管理 (IndexedDB / PNG)</span>
                   </div>
-                  <button
-                    type="button"
-                    disabled={importingTilepack}
-                    onClick={() => tilepackInputRef.current?.click()}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-bold flex items-center gap-1 text-[11px] cursor-pointer shadow-2xs disabled:opacity-50"
-                  >
-                    {importingTilepack ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>正在写入IndexedDB...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="w-3.5 h-3.5" />
-                        <span>从 mapdata 导入瓦片包</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="relative inline-block">
+                    <input
+                      ref={tilepackInputRef}
+                      type="file"
+                      accept=".tilepack,.json"
+                      onChange={handleTilepackFileChange}
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).value = '';
+                      }}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                    />
+                    <button
+                      type="button"
+                      disabled={importingTilepack}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-bold flex items-center gap-1 text-[11px] cursor-pointer shadow-2xs disabled:opacity-50 pointer-events-none"
+                    >
+                      {importingTilepack ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>正在写入IndexedDB...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>从 mapdata 导入瓦片包</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
                 <p className="text-[10px] text-emerald-800 leading-relaxed">
                   系统已升级为<b>直接保存 IndexedDB 数据与 PNG 瓦片包 (.tilepack)</b> 至手持机{' '}

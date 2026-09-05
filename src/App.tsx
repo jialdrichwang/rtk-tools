@@ -249,6 +249,8 @@ function MainLayout() {
             onHome={handleHome}
             onBack={handleBack}
             onOpenNtrip={() => setActiveModal('ntrip_settings')}
+            onOpenCompass={() => setActiveModal('compass')}
+            onOpenGPSControl={() => setActiveModal('ntrip_settings')}
           />
         </div>
       </div>

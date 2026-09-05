@@ -521,44 +521,53 @@ export const HistoryDataImportModal: React.FC<HistoryDataImportModalProps> = ({
             </div>
 
             {sourceType === 'upload' ? (
-              <div
-                onClick={() => {
-                  soundService.playClick();
-                  fileInputRef.current?.click();
-                }}
-                className="relative block rounded-2xl border-2 border-dashed border-slate-300 hover:border-amber-500 bg-amber-50/30 hover:bg-amber-50/70 p-4 flex flex-col items-center justify-center gap-2 text-xs font-bold text-slate-700 cursor-pointer transition shadow-2xs select-auto"
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="*/*,.csv,.txt,.dat,.json,.gpx,.kml,.tilepack,text/plain,text/csv,application/json"
-                  onChange={handleFileUpload}
-                  onClick={(e) => {
-                    (e.target as HTMLInputElement).value = '';
-                  }}
-                  disabled={isProcessing}
-                  className="hidden"
-                />
-                <Upload className="w-7 h-7 text-amber-600" />
-                <span className="text-slate-900 font-bold text-center block">
-                  {loadedFileName ? `已选文件: ${loadedFileName} (点击更换)` : '选取历史数据文件 (.csv / .dat / .txt / .json / .gpx)'}
-                </span>
-                <span className="text-[10px] text-slate-500 font-normal text-center block">
-                  支持格式: CASS DAT, CSV, TXT, GPX, KML, JSON, Tilepack
-                </span>
-                <button
-                  type="button"
-                  disabled={isProcessing}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    soundService.playClick();
-                    fileInputRef.current?.click();
-                  }}
-                  className="mt-1 px-4 py-2 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer transition"
+              <div className="space-y-2">
+                <div
+                  className="relative block rounded-2xl border-2 border-dashed border-amber-400 hover:border-amber-500 bg-amber-50/40 hover:bg-amber-50/70 p-4 flex flex-col items-center justify-center gap-2 text-xs font-bold text-slate-700 cursor-pointer transition shadow-2xs select-auto overflow-hidden group"
                 >
-                  <Upload className="w-4 h-4" />
-                  <span>打开手机文件选择器</span>
-                </button>
+                  {/* Direct full-card native touch target without display:none */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.txt,.dat,.json,.gpx,.kml,.tilepack,text/plain,text/csv,application/json"
+                    onChange={handleFileUpload}
+                    onClick={(e) => {
+                      (e.target as HTMLInputElement).value = '';
+                    }}
+                    disabled={isProcessing}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
+                    style={{ fontSize: '100px' }}
+                  />
+                  <Upload className="w-7 h-7 text-amber-600 pointer-events-none group-hover:scale-110 transition-transform" />
+                  <span className="text-slate-900 font-bold text-center block pointer-events-none">
+                    {loadedFileName ? `已选文件: ${loadedFileName} (点击更换)` : '选取历史数据文件 (.csv / .dat / .txt / .json / .gpx)'}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-normal text-center block pointer-events-none">
+                    支持格式: CASS DAT, CSV, TXT, GPX, KML, JSON, Tilepack
+                  </span>
+                  <div className="mt-1 px-4 py-2 bg-amber-600 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 pointer-events-none">
+                    <Upload className="w-4 h-4" />
+                    <span>打开手机文件选择器</span>
+                  </div>
+                </div>
+
+                {/* Visible native file picker fallback */}
+                <div className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-1">
+                  <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                    <span>备用：系统原生选择框 (强兼容模式)</span>
+                    <span className="text-[10px] text-amber-700">直接调取系统组件</span>
+                  </div>
+                  <input
+                    type="file"
+                    accept=".csv,.txt,.dat,.json,.gpx,.kml,.tilepack,text/plain,text/csv,application/json"
+                    onChange={handleFileUpload}
+                    onClick={(e) => {
+                      (e.target as HTMLInputElement).value = '';
+                    }}
+                    disabled={isProcessing}
+                    className="block w-full text-xs text-slate-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-amber-600 file:text-white hover:file:bg-amber-700 cursor-pointer"
+                  />
+                </div>
               </div>
             ) : (
               <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-2">

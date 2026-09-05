@@ -104,8 +104,8 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
 
   return (
     <header className="bg-white border-b border-slate-200 text-slate-800 select-none shadow-xs shrink-0">
-      {/* Top micro telemetry bar */}
-      <div className="flex items-center justify-between text-[11px] font-mono tracking-tight text-slate-500 bg-slate-50 border-b border-slate-200/80 px-3 py-1">
+      {/* Top micro telemetry bar (Fixed height: h-7 min-h-[28px] max-h-[28px] to strictly prevent page jitter) */}
+      <div className="flex items-center justify-between text-[11px] font-mono tracking-tight text-slate-500 bg-slate-50 border-b border-slate-200/80 px-3 h-7 min-h-[28px] max-h-[28px] overflow-hidden">
         <div className="flex items-center gap-2">
           <button
             onClick={onOpenNtrip}

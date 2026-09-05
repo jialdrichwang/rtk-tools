@@ -54,38 +54,33 @@ export const SideToolbar: React.FC<SideToolbarProps> = ({
   };
 
   return (
-    <aside className="w-16 bg-white border-l border-slate-200 flex flex-col items-center py-3 px-1.5 gap-2.5 select-none shrink-0 shadow-xs">
-      {/* 1. 主页/地图快捷导航 */}
-      {currentScreen !== 'home' ? (
-        <button
-          onClick={() => {
-            soundService.playClick();
+    <aside className="w-16 bg-white border-l border-slate-200 flex flex-col items-center py-2.5 px-1 gap-2 select-none shrink-0 shadow-xs overflow-y-auto max-h-full custom-vertical-slider">
+      {/* 1. 地图 / 主页 导航 */}
+      <button
+        onClick={() => {
+          soundService.playClick();
+          if (currentScreen === 'map') {
             if (onHome) onHome();
             else if (onNavigate) onNavigate('home');
-          }}
-          id="btn-toolbar-home"
-          title="返回主页"
-          className="w-13 h-13 rounded-xl bg-blue-50/80 hover:bg-blue-100 border border-blue-200 text-blue-700 flex flex-col items-center justify-center p-1 transition active:scale-95 cursor-pointer shadow-2xs"
-        >
-          <Home className="w-5 h-5 text-blue-600" />
-          <span className="text-[10px] font-bold tracking-tight mt-0.5">主页</span>
-        </button>
-      ) : (
-        <button
-          onClick={() => {
-            soundService.playClick();
+          } else {
             if (onNavigate) onNavigate('map');
-          }}
-          id="btn-toolbar-map"
-          title="打开GIS卫星地图"
-          className="w-13 h-13 rounded-xl bg-slate-50/80 hover:bg-slate-100 border border-slate-200 text-slate-700 flex flex-col items-center justify-center p-1 transition active:scale-95 cursor-pointer shadow-2xs"
-        >
-          <MapIcon className="w-5 h-5 text-blue-600" />
-          <span className="text-[10px] font-semibold tracking-tight mt-0.5">地图</span>
-        </button>
-      )}
+          }
+        }}
+        id="btn-toolbar-map"
+        title={currentScreen === 'map' ? '返回主页' : '打开GIS卫星地图'}
+        className="w-13 h-13 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200/90 text-slate-700 flex flex-col items-center justify-center p-1 transition active:scale-95 cursor-pointer shadow-2xs group"
+      >
+        {currentScreen === 'map' ? (
+          <Home className="w-5 h-5 text-blue-600 group-hover:scale-105 transition-transform" />
+        ) : (
+          <MapIcon className="w-5 h-5 text-purple-600 group-hover:scale-105 transition-transform" />
+        )}
+        <span className="text-[10px] font-bold text-slate-800 tracking-tight mt-0.5">
+          {currentScreen === 'map' ? '主页' : '地图'}
+        </span>
+      </button>
 
-      {/* 2. 定位模式切换 / GPS */}
+      {/* 2. 定位模式切换 / 真机GPS */}
       <button
         onClick={() => {
           soundService.playClick();
@@ -93,14 +88,14 @@ export const SideToolbar: React.FC<SideToolbarProps> = ({
           else if (onOpenNtrip) onOpenNtrip();
         }}
         id="btn-toolbar-gps"
-        title="定位模式与接收机设置"
-        className={`w-13 h-13 rounded-xl flex flex-col items-center justify-center p-1 border transition active:scale-95 cursor-pointer shadow-2xs ${
+        title="定位模式与高精差分设定"
+        className={`w-13 h-13 rounded-2xl flex flex-col items-center justify-center p-1 border transition active:scale-95 cursor-pointer shadow-2xs ${
           rtkState.mode === 'real_gps'
-            ? 'bg-emerald-50 border-emerald-300 text-emerald-700 font-semibold'
-            : 'bg-slate-50/80 hover:bg-slate-100 border-slate-200 text-slate-700'
+            ? 'bg-[#E8FAF4] border-[#A7EED4] text-[#00875A]'
+            : 'bg-white hover:bg-slate-50 border-slate-200/90 text-slate-700'
         }`}
       >
-        <Crosshair className="w-5 h-5 text-blue-600" />
+        <Crosshair className={`w-5 h-5 ${rtkState.mode === 'real_gps' ? 'text-[#00875A]' : 'text-blue-600'}`} />
         <span className="text-[9px] font-bold tracking-tighter mt-0.5">
           {rtkState.mode === 'real_gps' ? '真机GPS' : 'RTK模拟'}
         </span>
@@ -111,10 +106,10 @@ export const SideToolbar: React.FC<SideToolbarProps> = ({
         onClick={toggleScreenRotation}
         id="btn-toolbar-rotate"
         title="180° 翻转屏幕"
-        className="w-13 h-13 rounded-xl bg-slate-50/80 hover:bg-slate-100 border border-slate-200 flex flex-col items-center justify-center p-1 text-slate-700 transition active:scale-95 cursor-pointer shadow-2xs"
+        className="w-13 h-13 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200/90 flex flex-col items-center justify-center p-1 text-slate-700 transition active:scale-95 cursor-pointer shadow-2xs group"
       >
-        <RotateCw className="w-5 h-5 text-slate-600" />
-        <span className="text-[9px] font-semibold tracking-tighter mt-0.5 text-slate-600">
+        <RotateCw className="w-5 h-5 text-slate-600 group-hover:rotate-45 transition-transform" />
+        <span className="text-[9px] font-bold tracking-tighter mt-0.5 text-slate-800">
           180°翻转
         </span>
       </button>
@@ -124,35 +119,45 @@ export const SideToolbar: React.FC<SideToolbarProps> = ({
         onClick={toggleSound}
         id="btn-toolbar-sound"
         title={soundOn ? '提示音已开 (点击关闭)' : '提示音已静音 (点击开启)'}
-        className={`w-13 h-13 rounded-xl border flex flex-col items-center justify-center p-1 transition active:scale-95 cursor-pointer shadow-2xs ${
+        className={`w-13 h-13 rounded-2xl border flex flex-col items-center justify-center p-1 transition active:scale-95 cursor-pointer shadow-2xs ${
           soundOn
-            ? 'bg-slate-50/80 hover:bg-slate-100 border-slate-200 text-slate-700'
+            ? 'bg-white hover:bg-slate-50 border-slate-200/90 text-slate-700'
             : 'bg-rose-50 border-rose-200 text-rose-600'
         }`}
       >
         {soundOn ? (
-          <Volume2 className="w-5 h-5 text-emerald-600" />
+          <Volume2 className="w-5 h-5 text-[#00875A]" />
         ) : (
           <VolumeX className="w-5 h-5 text-rose-500" />
         )}
-        <span className="text-[9px] font-semibold tracking-tighter mt-0.5">
+        <span className="text-[9px] font-bold tracking-tighter mt-0.5 text-slate-800">
           {soundOn ? '蜂鸣开' : '已静音'}
         </span>
       </button>
 
-      {/* 5. 罗盘 */}
-      <div className="w-13 h-13 rounded-xl bg-slate-50/80 border border-slate-200 flex flex-col items-center justify-center p-1 text-slate-700 shadow-2xs">
-        <Compass
-          className="w-5 h-5 text-blue-600 transition-transform duration-300"
-          style={{ transform: `rotate(${rtkState.heading}deg)` }}
-        />
+      {/* 5. 罗盘 (点击打开地质测绘罗盘) */}
+      <button
+        onClick={() => {
+          soundService.playClick();
+          if (onOpenCompass) onOpenCompass();
+        }}
+        id="btn-toolbar-compass"
+        title="点击打开高精地质测绘罗盘"
+        className="w-13 h-13 rounded-2xl bg-white hover:bg-blue-50/60 border border-slate-200/90 flex flex-col items-center justify-center p-1 text-slate-700 transition active:scale-95 cursor-pointer shadow-2xs group"
+      >
+        <div className="relative flex items-center justify-center">
+          <Compass
+            className="w-5 h-5 text-blue-600 transition-transform duration-300 group-hover:scale-110"
+            style={{ transform: `rotate(${rtkState.heading}deg)` }}
+          />
+        </div>
         <span className="text-[9px] font-bold text-slate-800 leading-none mt-0.5">
           {getCompassDir(rtkState.heading)}
         </span>
-        <span className="text-[8px] text-slate-500 font-mono scale-90">
+        <span className="text-[8px] text-slate-500 font-mono scale-90 leading-tight">
           {Math.round(rtkState.heading)}°
         </span>
-      </div>
+      </button>
 
       {/* 6. NTRIP / RTK 解算状态快捷徽标 */}
       <button

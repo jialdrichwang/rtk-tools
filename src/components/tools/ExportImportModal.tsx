@@ -331,40 +331,49 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
               </div>
 
               {importMode === 'file' ? (
-                <div
-                  onClick={() => {
-                    soundService.playClick();
-                    fileInputRef.current?.click();
-                  }}
-                  className="relative block rounded-2xl border-2 border-dashed border-slate-300 hover:border-emerald-500 bg-emerald-50/30 hover:bg-emerald-50/70 p-4 flex flex-col items-center justify-center gap-2 text-xs font-bold text-slate-700 cursor-pointer transition shadow-2xs select-auto"
-                >
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileChange}
-                    onClick={(e) => {
-                      (e.target as HTMLInputElement).value = '';
-                    }}
-                    accept="*/*,.csv,.txt,.dat,.json,text/plain,text/csv,application/json"
-                    className="hidden"
-                  />
-                  <FileUp className="w-7 h-7 text-emerald-600" />
-                  <span className="text-slate-900 font-bold text-center block">选取坐标成果文件 (.dat / .csv / .txt / .json)</span>
-                  <span className="text-[10px] text-slate-500 font-normal text-center block">
-                    支持南方CASS (.dat), 标准CSV表格, TXT文本, JSON
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      soundService.playClick();
-                      fileInputRef.current?.click();
-                    }}
-                    className="mt-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 cursor-pointer transition"
+                <div className="space-y-2">
+                  <div
+                    className="relative block rounded-2xl border-2 border-dashed border-emerald-400 hover:border-emerald-500 bg-emerald-50/40 hover:bg-emerald-50/70 p-4 flex flex-col items-center justify-center gap-2 text-xs font-bold text-slate-700 cursor-pointer transition shadow-2xs select-auto overflow-hidden group"
                   >
-                    <FileUp className="w-4 h-4" />
-                    <span>打开手机文件选择器</span>
-                  </button>
+                    {/* Direct full-card native touch target without display:none */}
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileChange}
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).value = '';
+                      }}
+                      accept=".dat,.csv,.txt,.json,text/plain,text/csv,application/json"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
+                      style={{ fontSize: '100px' }}
+                    />
+                    <FileUp className="w-7 h-7 text-emerald-600 pointer-events-none group-hover:scale-110 transition-transform" />
+                    <span className="text-slate-900 font-bold text-center block pointer-events-none">选取坐标成果文件 (.dat / .csv / .txt / .json)</span>
+                    <span className="text-[10px] text-slate-500 font-normal text-center block pointer-events-none">
+                      支持南方CASS (.dat), 标准CSV表格, TXT文本, JSON
+                    </span>
+                    <div className="mt-1 px-4 py-2 bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-1.5 pointer-events-none">
+                      <FileUp className="w-4 h-4" />
+                      <span>打开手机文件选择器</span>
+                    </div>
+                  </div>
+
+                  {/* Visible native file picker fallback */}
+                  <div className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-1">
+                    <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                      <span>备用：系统原生选择框 (强兼容模式)</span>
+                      <span className="text-[10px] text-emerald-700">直接调取系统组件</span>
+                    </div>
+                    <input
+                      type="file"
+                      accept=".dat,.csv,.txt,.json,text/plain,text/csv,application/json"
+                      onChange={handleFileChange}
+                      onClick={(e) => {
+                        (e.target as HTMLInputElement).value = '';
+                      }}
+                      className="block w-full text-xs text-slate-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 cursor-pointer"
+                    />
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-2">
