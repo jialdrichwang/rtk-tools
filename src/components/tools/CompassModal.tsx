@@ -20,13 +20,16 @@ interface CompassModalProps {
 }
 
 export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) => {
-  const { rtkState, hasMagnetometer, isUsingGpsHeading, gpsCourseHeading } = useRTK();
-  const [heading, setHeading] = useState(247);
+  const { rtkState, gpsCourseHeading } = useRTK();
+  // Default to 0° (Magnetic North) or realistic azimuth
+  const [heading, setHeading] = useState(0);
+  const [hasSensor, setHasSensor] = useState(false);
   const [magneticField, setMagneticField] = useState(48.5); // microteslas (μT)
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [calibrationProgress, setCalibrationProgress] = useState(0);
   const [hasCalibrated, setHasCalibrated] = useState(false);
-  const [forcedHeadingMode, setForcedHeadingMode] = useState<'auto' | 'gps' | 'mag'>('auto');
+  // Default strictly to 'mag_lock' (地磁南北锁定)
+  const [headingMode, setHeadingMode] = useState<'mag_lock' | 'gps_course'>('mag_lock');
   const [dialStyle, setDialStyle] = useState<'survey_transit' | 'standard'>('survey_transit');
   const [numberMode, setNumberMode] = useState<'cardinal' | 'steps30'>('cardinal');
 
@@ -34,14 +37,30 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleOrientation = (e: DeviceOrientationEvent) => {
-      if (e.alpha !== null && !isNaN(e.alpha)) {
-        const compassHeading = (360 - e.alpha) % 360;
+    const handleOrientation = (e: any) => {
+      // iOS Safari provides webkitCompassHeading
+      if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+        setHeading(Math.round(e.webkitCompassHeading));
+        setHasSensor(true);
+        return;
+      }
+      // Chrome/Android absolute orientation
+      if (e.absolute === true && e.alpha !== null && !isNaN(e.alpha)) {
+        const compassHeading = Math.round((360 - e.alpha) % 360);
         setHeading(compassHeading);
+        setHasSensor(true);
+        return;
+      }
+      // Standard orientation fallback
+      if (e.alpha !== null && !isNaN(e.alpha)) {
+        const compassHeading = Math.round((360 - e.alpha) % 360);
+        setHeading(compassHeading);
+        setHasSensor(true);
       }
     };
 
-    if (typeof window !== 'undefined' && window.DeviceOrientationEvent) {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
       window.addEventListener('deviceorientation', handleOrientation, true);
     }
 
@@ -55,22 +74,22 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
     }, 1500);
 
     return () => {
-      window.removeEventListener('deviceorientation', handleOrientation, true);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+        window.removeEventListener('deviceorientation', handleOrientation, true);
+      }
       clearInterval(timer);
     };
   }, [isOpen, isCalibrating]);
 
   if (!isOpen) return null;
 
-  // Evaluate whether to use GPS heading or Magnetometer heading
-  const effectiveIsGps =
-    forcedHeadingMode === 'gps' ||
-    (!hasMagnetometer && forcedHeadingMode !== 'mag') ||
-    isUsingGpsHeading;
-
-  const activeHeading = effectiveIsGps
-    ? gpsCourseHeading || rtkState.heading || 247
-    : heading || rtkState.heading || 247;
+  // In 'mag_lock' mode, heading is strictly locked to geomagnetic North/South
+  // and does NOT follow GPS motion course!
+  const isGpsMode = headingMode === 'gps_course';
+  const activeHeading = isGpsMode
+    ? (gpsCourseHeading || rtkState.heading || heading || 0)
+    : heading;
 
   // Handle 8-figure calibration
   const startCalibration = () => {
@@ -107,10 +126,10 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
 
   // Determine magnetic interference status
   const getMagneticStatus = () => {
-    if (effectiveIsGps) {
+    if (isGpsMode) {
       return {
         level: 'gps',
-        label: 'GPS 卫星运动矢量推算 (免地磁干扰)',
+        label: 'GPS 卫星运动矢量推算 (跟随移动方向)',
         color: 'text-blue-700 bg-blue-50 border-blue-200',
         icon: Navigation,
       };
@@ -118,7 +137,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
     if (magneticField >= 40 && magneticField <= 58) {
       return {
         level: 'good',
-        label: '地磁场环境优良 (无明显干扰)',
+        label: '地磁场锁定正常：指针红端指北，蓝端指南',
         color: 'text-emerald-700 bg-emerald-50 border-emerald-200',
         icon: CheckCircle2,
       };
@@ -126,14 +145,14 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
     if ((magneticField >= 32 && magneticField < 40) || (magneticField > 58 && magneticField <= 72)) {
       return {
         level: 'warn',
-        label: '存在轻度磁场波动',
+        label: '存在轻度地磁波动，仍保持物理南北指向',
         color: 'text-amber-700 bg-amber-50 border-amber-200',
         icon: AlertTriangle,
       };
     }
     return {
       level: 'danger',
-      label: '强磁场干扰！建议使用GPS矢量或校准',
+      label: '强磁场干扰！建议8字校准罗盘',
       color: 'text-rose-700 bg-rose-50 border-rose-200',
       icon: ShieldAlert,
     };
@@ -189,49 +208,77 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
 
           <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-200">
             <button
-              onClick={() => setForcedHeadingMode('gps')}
+              onClick={() => setHeadingMode('mag_lock')}
+              title="指针锁定地球磁北和磁南，不随运动方向漂移"
               className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
-                effectiveIsGps
-                  ? 'bg-blue-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              GPS 矢量
-            </button>
-            <button
-              onClick={() => setForcedHeadingMode('mag')}
-              className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
-                !effectiveIsGps
+                !isGpsMode
                   ? 'bg-emerald-600 text-white shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              地磁传感
+              🧭 地磁锁定
+            </button>
+            <button
+              onClick={() => setHeadingMode('gps_course')}
+              title="仅在行进中根据GPS运动矢量推算前进航迹"
+              className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                isGpsMode
+                  ? 'bg-blue-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              🛰️ 运动航向
             </button>
           </div>
         </div>
 
         {/* Content */}
-        <div className="p-3.5 flex-1 flex flex-col items-center justify-between space-y-2.5 overflow-y-auto">
+        <div className="p-3.5 flex-1 flex flex-col items-center justify-between space-y-2 overflow-y-auto">
           {/* Main Azimuth Display */}
-          <div className="text-center">
+          <div className="text-center w-full">
             <div className="flex items-center justify-center gap-2">
               <span className="text-3xl font-black font-mono text-slate-900 tracking-tight">
                 {Math.round(activeHeading)}°
               </span>
               <span
                 className={`text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded-md border ${
-                  effectiveIsGps
+                  isGpsMode
                     ? 'bg-blue-100 text-blue-800 border-blue-300'
                     : 'bg-emerald-100 text-emerald-800 border-emerald-300'
                 }`}
               >
-                {effectiveIsGps ? 'GPS' : 'MAG'}
+                {!isGpsMode ? '地磁已锁定' : 'GPS航迹'}
               </span>
             </div>
             <div className="text-xs font-bold text-blue-600 mt-0.5">
               {getDirectionText(activeHeading)}
             </div>
+
+            {/* Quick Testing Presets for Simulated Device Heading */}
+            {!hasSensor && !isGpsMode && (
+              <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
+                <span className="text-[10px] text-slate-400 mr-0.5">设备朝向:</span>
+                {[
+                  { label: '正北 0°', val: 0 },
+                  { label: '正东 90°', val: 90 },
+                  { label: '正南 180°', val: 180 },
+                  { label: '正西 270°', val: 270 },
+                  { label: '西北 308°', val: 308 },
+                ].map((preset) => (
+                  <button
+                    key={preset.val}
+                    onClick={() => setHeading(preset.val)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border transition cursor-pointer ${
+                      heading === preset.val
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Compass Dial Area: Uses Authentic Geological Survey Compass matching 指南针new.jpg */}
@@ -308,12 +355,12 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-2 flex items-center justify-between text-xs font-mono">
               <div className="flex items-center gap-1.5">
                 <span className="text-slate-500 font-sans">
-                  {effectiveIsGps ? '航向驱动源:' : '地磁场强度:'}
+                  {isGpsMode ? '航向驱动源:' : '地磁场强度:'}
                 </span>
                 <span className="text-slate-900 font-bold text-sm">
-                  {effectiveIsGps ? (
+                  {isGpsMode ? (
                     <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 font-mono">
-                      GPS
+                      GPS 卫星航向
                     </span>
                   ) : (
                     <span>
@@ -324,9 +371,9 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                 </span>
               </div>
               <span className="text-[10px] text-slate-400 font-sans">
-                {effectiveIsGps
+                {isGpsMode
                   ? `移动速度: ${(rtkState.speed || 0).toFixed(1)} m/s`
-                  : '自然环境基准'}
+                  : '已锁定地球磁北'}
               </span>
             </div>
 
