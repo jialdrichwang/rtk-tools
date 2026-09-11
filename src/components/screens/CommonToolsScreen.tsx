@@ -13,6 +13,8 @@ import {
   Wrench,
   FileSpreadsheet,
   FolderArchive,
+  Terminal,
+  Bluetooth,
 } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 import { useRTK } from '../../context/RTKContext';
@@ -28,6 +30,8 @@ interface CommonToolsScreenProps {
   onOpenPointLibrary?: () => void;
   onOpenExportTrack?: () => void;
   onOpenHistoryImport?: () => void;
+  onOpenNmeaMonitor?: () => void;
+  onOpenBluetooth?: () => void;
 }
 
 export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
@@ -41,6 +45,8 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
   onOpenPointLibrary,
   onOpenExportTrack,
   onOpenHistoryImport,
+  onOpenNmeaMonitor,
+  onOpenBluetooth,
 }) => {
   const [activeCategory, setActiveCategory] = useState<'all' | 'data' | 'tool'>('all');
   const { hasBarometerSensor, rtkState } = useRTK();
@@ -148,6 +154,26 @@ export const CommonToolsScreen: React.FC<CommonToolsScreenProps> = ({
       badge: '系统授权',
       color: 'text-purple-600 bg-purple-50 border-purple-200',
       action: onOpenActivation,
+    },
+    {
+      id: 'nmea_monitor',
+      category: 'tool',
+      title: 'NMEA-0183 报文监控',
+      desc: '外置蓝牙RTK数据流实时监听与假连接排查诊断',
+      icon: Terminal,
+      badge: '报文/假连接排查',
+      color: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+      action: onOpenNmeaMonitor || (() => {}),
+    },
+    {
+      id: 'bluetooth_scanner',
+      category: 'tool',
+      title: '外置蓝牙 RTK 接收机',
+      desc: '配对华测、南方、中海达等全系外置GNSS',
+      icon: Bluetooth,
+      badge: rtkState.mode === 'bluetooth_gnss' ? '已连接' : '配对搜索',
+      color: 'text-blue-600 bg-blue-50 border-blue-200',
+      action: onOpenBluetooth || (() => {}),
     },
   ];
 

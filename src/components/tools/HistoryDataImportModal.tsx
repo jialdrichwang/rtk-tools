@@ -47,7 +47,7 @@ export const HistoryDataImportModal: React.FC<HistoryDataImportModalProps> = ({
 }) => {
   const {
     currentProject,
-    setCurrentProject,
+    updateProject,
     importPointsBatch,
     addTrack,
     addRoute,
@@ -326,18 +326,16 @@ export const HistoryDataImportModal: React.FC<HistoryDataImportModalProps> = ({
         try {
           if (item.type === 'project') {
             // Update project settings
-            setCurrentProject((prev) => ({
-              ...prev,
-              name: item.data.name || prev.name,
-              coordSystem: item.data.coordSystem || prev.coordSystem,
-              centralMeridian: item.data.centralMeridian || prev.centralMeridian,
-            }));
+            updateProject(currentProject.id, {
+              name: item.data.name || currentProject.name,
+              coordSystem: item.data.coordSystem || currentProject.coordSystem,
+              centralMeridian: item.data.centralMeridian || currentProject.centralMeridian,
+            });
             success++;
           } else if (item.type === 'point') {
             pointsToImport.push(item.data);
           } else if (item.type === 'track') {
             addTrack({
-              id: `tk_imp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
               name: item.data.name || `历史航迹_${Date.now()}`,
               points: item.data.points || [],
               distance: item.data.distance || 0,
@@ -522,6 +520,37 @@ export const HistoryDataImportModal: React.FC<HistoryDataImportModalProps> = ({
 
             {sourceType === 'upload' ? (
               <div className="space-y-2">
+                {/* 突破 WebView 限制快捷读取 */}
+                <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-300 rounded-2xl p-3 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-bold text-amber-950 block">免选文件 · 一键从剪贴板解析</span>
+                    <span className="text-[10px] text-slate-500">微信/QQ复制历史坐标或GPX文本后直接载入</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      soundService.playClick();
+                      try {
+                        if (navigator.clipboard && navigator.clipboard.readText) {
+                          const text = await navigator.clipboard.readText();
+                          if (text && text.trim()) {
+                            setLoadedFileName('系统剪贴板导入.txt');
+                            setFileRawContent(text);
+                            analyzeContent(text, '系统剪贴板导入.txt', selectedCategory);
+                            return;
+                          }
+                        }
+                        alert('剪贴板中未检测到文本，请在微信/文档中长按复制后重试。');
+                      } catch {
+                        alert('无法直接访问剪贴板，请检查系统权限。');
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition"
+                  >
+                    读取剪贴板
+                  </button>
+                </div>
+
                 <div
                   className="relative block rounded-2xl border-2 border-dashed border-amber-400 hover:border-amber-500 bg-amber-50/40 hover:bg-amber-50/70 p-4 flex flex-col items-center justify-center gap-2 text-xs font-bold text-slate-700 cursor-pointer transition shadow-2xs select-auto overflow-hidden group"
                 >
@@ -529,7 +558,7 @@ export const HistoryDataImportModal: React.FC<HistoryDataImportModalProps> = ({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".csv,.txt,.dat,.json,.gpx,.kml,.tilepack,text/plain,text/csv,application/json"
+                    accept="*/*"
                     onChange={handleFileUpload}
                     onClick={(e) => {
                       (e.target as HTMLInputElement).value = '';
@@ -559,7 +588,7 @@ export const HistoryDataImportModal: React.FC<HistoryDataImportModalProps> = ({
                   </div>
                   <input
                     type="file"
-                    accept=".csv,.txt,.dat,.json,.gpx,.kml,.tilepack,text/plain,text/csv,application/json"
+                    accept="*/*"
                     onChange={handleFileUpload}
                     onClick={(e) => {
                       (e.target as HTMLInputElement).value = '';

@@ -287,6 +287,22 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
   const effectiveCenterLat = typeof rawLat === 'number' && !isNaN(rawLat) && rawLat !== 0 ? rawLat : 39.9042;
   const effectiveCenterLon = typeof rawLon === 'number' && !isNaN(rawLon) && rawLon !== 0 ? rawLon : 116.4074;
   const currentLayer = propLayer ?? 'gaode_satellite';
+  const [selectedDownloadLayer, setSelectedDownloadLayer] = useState<MapLayerType>(
+    propLayer && propLayer !== 'offline_grid' ? propLayer : 'gaode_satellite'
+  );
+
+  const AVAILABLE_DOWNLOAD_LAYERS: { id: MapLayerType; name: string; desc: string }[] = [
+    { id: 'gaode_satellite', name: '高德卫星影像', desc: '高德高清遥感卫片' },
+    { id: 'gaode_street', name: '高德标准路网', desc: '高德矢量道路与注记' },
+    { id: 'tianditu_satellite', name: '天地图全球卫星', desc: '国家天地图官方卫星影像' },
+    { id: 'esri_satellite', name: 'ESRI 极清卫星', desc: 'ArcGIS 全球清晰遥感' },
+    { id: 'bing_satellite', name: '必应卫星影像', desc: '微软必应高空航拍图' },
+    { id: 'bing_road', name: '必应道路地图', desc: '微软全球精细道路网' },
+    { id: 'baidu_satellite', name: '百度卫星影像', desc: '百度遥感影像卫片' },
+    { id: 'baidu_street', name: '百度标准地图', desc: '百度标准城市街区' },
+    { id: 'terrain', name: '地形等高线图', desc: 'ArcGIS 高程地形图' },
+    { id: 'street', name: 'CartoDB 道路', desc: '极简制图工程矢量底图' },
+  ];
 
   // Primary mode state
   const [scopeMode, setScopeMode] = useState<ScopeMode>('radius');
@@ -789,8 +805,9 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
 
   // Start tile download process
   const handleStartDownload = async () => {
-    if (currentLayer === 'offline_grid') {
-      alert('当前处于脱离底图网格模式，无需下载瓦片！请先切换至卫星遥感或矢量图层后再进行下载。');
+    const targetLayer = selectedDownloadLayer || currentLayer;
+    if (targetLayer === 'offline_grid') {
+      alert('当前处于脱离底图网格模式，无需下载瓦片！请先选择卫星遥感或矢量图层后再进行下载。');
       return;
     }
 
@@ -835,8 +852,8 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
       const chunk = tilesToDownload.slice(i, i + chunkSize);
       await Promise.all(
         chunk.map(async (tile) => {
-          const tileKey = offlineMapTileService.getTileKey(currentLayer, tile.z, tile.x, tile.y);
-          const url = getTileUrlFunction(currentLayer, tile.x, tile.y, tile.z);
+          const tileKey = offlineMapTileService.getTileKey(targetLayer, tile.z, tile.x, tile.y);
+          const url = getTileUrlFunction(targetLayer, tile.x, tile.y, tile.z);
 
           try {
             const blob = await fetchTileBlob(url);
@@ -861,8 +878,8 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
     const newMeta: CacheRegionMeta = {
       id: 'region_' + Date.now(),
       name: cleanRegionName,
-      layerId: currentLayer,
-      layerName: layerNameMap[currentLayer] || currentLayer,
+      layerId: targetLayer,
+      layerName: layerNameMap[targetLayer] || targetLayer,
       centerLat: activeConfig.centerLat,
       centerLon: activeConfig.centerLon,
       radiusKm: activeConfig.radiusKm,
@@ -1157,17 +1174,52 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
         <div className="p-4 overflow-y-auto flex-1 space-y-4 text-xs">
           {activeTab === 'download' ? (
             <>
-              {/* Current layer info banner */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
-                <div>
-                  <span className="text-slate-700 block text-[11px]">当前离线下载底图图层</span>
-                  <span className="font-bold text-slate-800 text-sm">
-                    {layerNameMap[currentLayer] || currentLayer}
-                  </span>
+              {/* Current layer selection banner with multiple map download options */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-slate-700 block text-[11px] font-semibold">离线下载底图图层</span>
+                    <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5 mt-0.5">
+                      <span className="w-2 h-2 rounded-full bg-teal-500"></span>
+                      {layerNameMap[selectedDownloadLayer] || selectedDownloadLayer}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-slate-700 block text-[11px]">手持机存储目录</span>
+                    <span className="font-mono font-bold text-blue-700 text-[11px]">.../mapdata/</span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-slate-700 block text-[11px]">外业手持机底图存储目录</span>
-                  <span className="font-mono font-medium text-blue-700 text-[11px]">.../mapdata/</span>
+
+                {/* Layer Selector Pills */}
+                <div className="pt-1 border-t border-slate-200/80">
+                  <span className="text-[10px] text-slate-500 block mb-1.5 font-medium">
+                    选择其它地图下载入口 (可离线下载多种卫星与路网图层):
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    {AVAILABLE_DOWNLOAD_LAYERS.map((layer) => {
+                      const isSelected = selectedDownloadLayer === layer.id;
+                      return (
+                        <button
+                          key={layer.id}
+                          type="button"
+                          onClick={() => {
+                            soundService.playClick();
+                            setSelectedDownloadLayer(layer.id);
+                          }}
+                          className={`text-left px-2.5 py-1.5 rounded-lg border text-xs transition cursor-pointer flex flex-col ${
+                            isSelected
+                              ? 'bg-blue-50 border-blue-500 text-blue-900 font-bold shadow-xs'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span className="truncate">{layer.name}</span>
+                          <span className="text-[9px] text-slate-600 font-normal truncate">
+                            {layer.desc}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -1808,7 +1860,7 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
                         <input
                           ref={fileInputRef}
                           type="file"
-                          accept=".txt,.json,.csv,.dat,.geojson,text/plain,application/json"
+                          accept="*/*"
                           onChange={handleFileChange}
                           onClick={(e) => {
                             (e.target as HTMLInputElement).value = '';
@@ -1840,7 +1892,7 @@ export const OfflineMapModal: React.FC<OfflineMapModalProps> = ({
                         </div>
                         <input
                           type="file"
-                          accept=".txt,.json,.csv,.dat,.geojson,text/plain,application/json"
+                          accept="*/*"
                           onChange={handleFileChange}
                           onClick={(e) => {
                             (e.target as HTMLInputElement).value = '';

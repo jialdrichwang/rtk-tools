@@ -283,7 +283,7 @@ export const NtripSettingsModal: React.FC<NtripSettingsModalProps> = ({ onClose 
                 </div>
                 <button
                   type="button"
-                  onClick={connectBluetoothGNSS}
+                  onClick={() => { void connectBluetoothGNSS(); }}
                   className="w-full py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer shadow-xs"
                 >
                   <Bluetooth className="w-3.5 h-3.5" />

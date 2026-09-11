@@ -103,10 +103,10 @@ class OfflineMapTileService {
   }
 
   /**
-   * [USER REQ 3] Prioritize calling map data from com.rtkproject.files/mapdata/
+   * [USER REQ 3 & 8] Prioritize calling map data from com.rtkproject.files/mapdata/ and mapdata/mapcache/
    * 1. Checks IndexedDB tile blobs cache for (layerId_z_x_y or z_x_y).
-   * 2. Checks filesystem storage under com.rtkproject.files/mapdata/ for discrete tile files (.png / .jpg).
-   * 3. Returns ObjectURL/DataURL if found locally; returns null if not found (caller then downloads from network).
+   * 2. Checks filesystem storage under com.rtkproject.files/mapdata/mapcache/ and mapdata/
+   * 3. Returns ObjectURL/DataURL if found locally; returns null if not found.
    */
   public async getMapDataTileUrl(
     layerId: string,
@@ -124,8 +124,11 @@ class OfflineMapTileService {
     const genericIdbUrl = await this.getCachedTileUrl(genericKey);
     if (genericIdbUrl) return genericIdbUrl;
 
-    // 3. Check com.rtkproject.files/mapdata/ file storage
+    // 3. Check com.rtkproject.files/mapdata/ and mapcache/ file storage
     const candidateFiles = [
+      `mapcache/${layerId}_${z}_${x}_${y}.png`,
+      `mapcache/${layerId}_${z}_${x}_${y}.jpg`,
+      `mapcache/${layerId}_${z}_${x}_${y}.bin`,
       `${layerId}_${z}_${x}_${y}.png`,
       `${layerId}_${z}_${x}_${y}.jpg`,
       `${z}_${x}_${y}.png`,
@@ -154,6 +157,74 @@ class OfflineMapTileService {
     }
 
     return null;
+  }
+
+  /**
+   * [USER REQ 8] Cache a browsed map tile into IndexedDB and mapdata/mapcache/
+   * Automatically records layer type, coordinates calibration metadata
+   */
+  public async cacheBrowsedTile(
+    layerId: string,
+    z: number,
+    x: number,
+    y: number,
+    blob: Blob
+  ): Promise<void> {
+    try {
+      const tileKey = this.getTileKey(layerId, z, x, y);
+      await this.saveTileBlob(tileKey, blob);
+
+      // Async write to mapdata/mapcache/ on device storage for portable offline use across tablets
+      const filename = `mapcache/${layerId}_${z}_${x}_${y}.png`;
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          const base64data = reader.result as string;
+          if (base64data) {
+            await fileStorageService.saveFile('mapdata', filename, base64data);
+            this.updateMapCacheManifest(layerId, z, x, y);
+          }
+        } catch {}
+      };
+      reader.readAsDataURL(blob);
+    } catch {}
+  }
+
+  private cacheManifestDebounceTimer: any = null;
+  private pendingTilesCount = 0;
+  private cachedLayersSet = new Set<string>();
+
+  private updateMapCacheManifest(layerId: string, z: number, x: number, y: number) {
+    this.pendingTilesCount++;
+    this.cachedLayersSet.add(layerId);
+
+    if (this.cacheManifestDebounceTimer) return;
+    this.cacheManifestDebounceTimer = setTimeout(async () => {
+      this.cacheManifestDebounceTimer = null;
+      try {
+        let manifest: any = {
+          updatedAt: new Date().toISOString(),
+          description: 'RTK 浏览地图自动缓存 (复制到其他平板可直接离线使用)',
+          targetDirectory: 'com.rtkproject.files/mapdata/mapcache',
+          layers: Array.from(this.cachedLayersSet),
+          totalCachedTiles: this.pendingTilesCount,
+        };
+        try {
+          const oldManifestStr = await fileStorageService.readFile('mapdata', 'mapcache/manifest.json');
+          if (oldManifestStr) {
+            const parsed = JSON.parse(oldManifestStr);
+            manifest.totalCachedTiles = (parsed.totalCachedTiles || 0) + this.pendingTilesCount;
+            manifest.layers = Array.from(new Set([...(parsed.layers || []), ...manifest.layers]));
+          }
+        } catch {}
+        this.pendingTilesCount = 0;
+        await fileStorageService.saveFile(
+          'mapdata',
+          'mapcache/manifest.json',
+          JSON.stringify(manifest, null, 2)
+        );
+      } catch {}
+    }, 5000);
   }
 
   /**

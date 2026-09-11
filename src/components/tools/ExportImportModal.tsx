@@ -163,6 +163,47 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
     executeImport(manualText, '手动输入文本');
   };
 
+  // 突破 WebView 限制：一键从剪贴板读取
+  const handleReadFromClipboard = async () => {
+    soundService.playClick();
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          setManualText(text);
+          executeImport(text, '系统剪贴板');
+          return;
+        }
+      }
+      setImportMode('text');
+      setImportStatus({
+        type: 'error',
+        message: '剪贴板为空或系统权限限制，请切换至下方“直接粘贴文本”长按粘贴即可。',
+      });
+    } catch (e) {
+      setImportMode('text');
+      setImportStatus({
+        type: 'error',
+        message: '浏览器未授予剪贴板读取权限，已自动为您打开文本框，请在输入框内长按粘贴。',
+      });
+    }
+  };
+
+  // 载入工程测绘样板数据
+  const handleLoadSampleData = () => {
+    soundService.playSuccess();
+    const sample = `DK1,3389120.450,512340.670,42.350,控制点
+DK2,3389165.890,512388.120,43.120,控制点
+K0+000,3389200.000,512400.000,43.500,放样起点
+K0+020,3389218.790,512406.840,43.850,放样桩
+K0+040,3389237.580,512413.680,44.200,放样桩
+J1,3389280.120,512430.500,45.000,界址点
+J2,3389310.450,512410.200,45.300,界址点
+J3,3389295.600,512370.800,44.900,界址点`;
+    setManualText(sample);
+    executeImport(sample, '工程测量示范样板');
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 z-50 select-none">
       <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
@@ -306,9 +347,42 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
           {/* TAB 2: Import */}
           {activeTab === 'import' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              {/* 突破 WebView 限制的快速免选文件通道 */}
+              <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-300 rounded-2xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                    <ClipboardPaste className="w-4 h-4 text-emerald-600" />
+                    <span>免文件选择器 · 快速穿透导入</span>
+                  </span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
+                    突破WebView限制
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-600 leading-relaxed">
+                  在微信、QQ或文件管理器中复制坐标内容后，点击下方按钮即可一键读取入库：
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleReadFromClipboard}
+                    className="py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
+                  >
+                    <ClipboardPaste className="w-3.5 h-3.5" />
+                    <span>一键从剪贴板读取</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadSampleData}
+                    className="py-2 px-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                  >
+                    <span>载入工程示范样板</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
                 <span className="text-xs font-bold text-slate-800">
-                  导入模式
+                  常规文件导入方式
                 </span>
                 <div className="flex items-center bg-slate-100 p-0.5 rounded-lg text-[11px]">
                   <button
@@ -343,7 +417,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                       onClick={(e) => {
                         (e.target as HTMLInputElement).value = '';
                       }}
-                      accept=".dat,.csv,.txt,.json,text/plain,text/csv,application/json"
+                      accept="*/*"
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-30"
                       style={{ fontSize: '100px' }}
                     />
@@ -366,7 +440,7 @@ export const ExportImportModal: React.FC<ExportImportModalProps> = ({
                     </div>
                     <input
                       type="file"
-                      accept=".dat,.csv,.txt,.json,text/plain,text/csv,application/json"
+                      accept="*/*"
                       onChange={handleFileChange}
                       onClick={(e) => {
                         (e.target as HTMLInputElement).value = '';

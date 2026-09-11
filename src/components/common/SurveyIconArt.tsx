@@ -227,57 +227,104 @@ export const EngineeringSurveyIcon: React.FC<{ className?: string }> = ({ classN
   </svg>
 );
 
-// 6. 工程项目: Hand catching/receiving falling shiny gold coins
+// 6. 工程项目: Professional engineering project folder, survey blueprint, and construction hardhat
 export const ProjectManageIcon: React.FC<{ className?: string }> = ({ className = 'w-16 h-16' }) => (
   <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
     <defs>
-      <filter id="handShadow" x="0" y="0" width="100" height="100" filterUnits="userSpaceOnUse">
-        <feDropShadow dx="0" dy="4" stdDeviation="3" floodColor="#B45309" floodOpacity="0.25" />
+      <filter id="projectShadow" x="0" y="0" width="100" height="100" filterUnits="userSpaceOnUse">
+        <feDropShadow dx="0" dy="4" stdDeviation="3" floodColor="#0F172A" floodOpacity="0.22" />
       </filter>
-      <linearGradient id="goldCoin" x1="0" y1="0" x2="1" y2="1">
+      <linearGradient id="folderBlue" x1="16" y1="18" x2="84" y2="80" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#2563EB" />
+        <stop offset="100%" stopColor="#1E40AF" />
+      </linearGradient>
+      <linearGradient id="folderFront" x1="16" y1="40" x2="84" y2="82" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#3B82F6" />
+        <stop offset="100%" stopColor="#1D4ED8" />
+      </linearGradient>
+      <linearGradient id="hardhatYellow" x1="38" y1="46" x2="84" y2="82" gradientUnits="userSpaceOnUse">
         <stop offset="0%" stopColor="#FDE047" />
-        <stop offset="60%" stopColor="#EAB308" />
-        <stop offset="100%" stopColor="#CA8A04" />
+        <stop offset="40%" stopColor="#F59E0B" />
+        <stop offset="100%" stopColor="#D97706" />
+      </linearGradient>
+      <linearGradient id="blueprintBg" x1="24" y1="20" x2="76" y2="60" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#F0F9FF" />
+        <stop offset="100%" stopColor="#E0F2FE" />
       </linearGradient>
     </defs>
-    <g filter="url(#handShadow)">
-      {/* Falling Gold Coins with dynamic tilt */}
-      <g transform="translate(56, 16) rotate(-15)">
-        <ellipse cx="0" cy="0" rx="8" ry="4.5" fill="url(#goldCoin)" stroke="#A16207" strokeWidth="1" />
-        <ellipse cx="0" cy="0" rx="5" ry="2.5" fill="#FDE047" />
-      </g>
-      <g transform="translate(42, 24) rotate(20)">
-        <ellipse cx="0" cy="0" rx="9" ry="5" fill="url(#goldCoin)" stroke="#A16207" strokeWidth="1" />
-        <ellipse cx="0" cy="0" rx="6" ry="3" fill="#FDE047" />
-      </g>
-      <g transform="translate(68, 28) rotate(-35)">
-        <ellipse cx="0" cy="0" rx="7.5" ry="4" fill="url(#goldCoin)" stroke="#A16207" strokeWidth="1" />
-      </g>
-      <g transform="translate(52, 38) rotate(5)">
-        <ellipse cx="0" cy="0" rx="10" ry="5.5" fill="url(#goldCoin)" stroke="#A16207" strokeWidth="1" />
-        <ellipse cx="0" cy="0" rx="6.5" ry="3" fill="#FDE047" />
-      </g>
-      <g transform="translate(38, 42) rotate(-10)">
-        <ellipse cx="0" cy="0" rx="8" ry="4.5" fill="url(#goldCoin)" stroke="#A16207" strokeWidth="1" />
-      </g>
-      <g transform="translate(64, 44) rotate(25)">
-        <ellipse cx="0" cy="0" rx="8" ry="4.5" fill="url(#goldCoin)" stroke="#A16207" strokeWidth="1" />
-      </g>
+    <g filter="url(#projectShadow)">
+      {/* Back Folder Body */}
+      {/* Folder Top Tab */}
+      <path d="M18 24C18 20.6863 20.6863 18 24 18H42L48 24H80C83.3137 24 86 26.6863 86 30V44H18V24Z" fill="#1D4ED8" />
+      <rect x="18" y="24" width="68" height="56" rx="6" fill="url(#folderBlue)" />
 
-      {/* Outstretched Hand & Arm with red cuff */}
-      {/* Red sleeve cuff */}
-      <path d="M78 62L88 65V78L78 75Z" fill="#DC2626" />
-      <rect x="75" y="60" width="4" height="17" rx="1.5" fill="#FFFFFF" />
-      {/* Palm & Fingers */}
+      {/* Engineering Survey Blueprint (peeking out of the folder) */}
+      <rect x="25" y="16" width="50" height="38" rx="3" fill="url(#blueprintBg)" stroke="#93C5FD" strokeWidth="1" />
+      {/* Blueprint Grid Lines */}
+      <line x1="32" y1="16" x2="32" y2="50" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      <line x1="42" y1="16" x2="42" y2="50" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      <line x1="52" y1="16" x2="52" y2="50" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      <line x1="62" y1="16" x2="62" y2="50" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      <line x1="25" y1="24" x2="75" y2="24" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      <line x1="25" y1="32" x2="75" y2="32" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      <line x1="25" y1="40" x2="75" y2="40" stroke="#BAE6FD" strokeWidth="0.8" strokeDasharray="1.5 1.5" />
+      {/* Blueprint Survey Traverse Line and Points */}
+      <polyline points="32,38 42,26 56,34 66,24" fill="none" stroke="#0284C7" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="32" cy="38" r="2.2" fill="#DC2626" />
+      <circle cx="42" cy="26" r="2.2" fill="#0284C7" />
+      <circle cx="56" cy="34" r="2.2" fill="#0284C7" />
+      <circle cx="66" cy="24" r="2.2" fill="#DC2626" />
+
+      {/* Front Folder Flap Pocket */}
+      <path d="M18 42H86V74C86 77.3137 83.3137 80 80 80H24C20.6863 80 18 77.3137 18 74V42Z" fill="url(#folderFront)" />
+      {/* Folder Pocket Accent Seam */}
+      <line x1="18" y1="42" x2="86" y2="42" stroke="#60A5FA" strokeWidth="1.5" />
+      {/* Project Label Tag on Pocket */}
+      <rect x="24" y="50" width="22" height="12" rx="2" fill="#FFFFFF" fillOpacity="0.9" />
+      <rect x="27" y="53" width="16" height="2" rx="1" fill="#3B82F6" />
+      <rect x="27" y="57" width="11" height="2" rx="1" fill="#94A3B8" />
+
+      {/* Engineering Yellow Construction Safety Helmet (Hardhat) in Foreground */}
+      {/* Hardhat Dome */}
       <path
-        d="M75 62C68 62 60 60 52 58C46 56 40 56 36 60C34 62 36 66 40 67L54 70C60 71 68 72 75 74V62Z"
-        fill="#FBCFE8"
+        d="M48 64C48 51.5 56 44 68 44C80 44 88 51.5 88 64H48Z"
+        fill="url(#hardhatYellow)"
       />
+      {/* Hardhat Center Ridge Line (Reinforcement rib) */}
       <path
-        d="M75 62C66 61 58 59 48 56C42 54 35 56 32 60C30 63 32 67 36 68L56 72C64 73 70 74 75 74"
-        stroke="#F472B6"
-        strokeWidth="1.5"
+        d="M66 44C66 44 67.5 52 67.5 64H69.5C69.5 52 71 44 71 44H66Z"
+        fill="#FEF08A"
       />
+      {/* Hardhat Rim / Brim */}
+      <path
+        d="M45 64C45 62.5 48 62 50 62H86C88 62 91 62.5 91 64C91 66 88 67 86 67H50C48 67 45 66 45 64Z"
+        fill="#CA8A04"
+      />
+      {/* Front Peak / Visor Overhang */}
+      <path
+        d="M44 64C44 63.5 46 63 48 63H88C90 63 92 63.5 92 64C92 65.2 89 66 86 66H50C47 66 44 65.2 44 64Z"
+        fill="#FDE047"
+      />
+      {/* Glossy Specular Highlight Arc */}
+      <path
+        d="M54 52C58 47.5 64 46 68 46"
+        stroke="#FFFFFF"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeOpacity="0.85"
+      />
+
+      {/* Engineering Scale Ruler peeking from bottom right */}
+      <g transform="translate(18, 70) rotate(-18)">
+        <rect x="0" y="0" width="34" height="6" rx="1" fill="#F8FAFC" stroke="#94A3B8" strokeWidth="0.8" />
+        <line x1="4" y1="0" x2="4" y2="3.5" stroke="#334155" strokeWidth="0.8" />
+        <line x1="8" y1="0" x2="8" y2="2" stroke="#64748B" strokeWidth="0.6" />
+        <line x1="12" y1="0" x2="12" y2="3.5" stroke="#334155" strokeWidth="0.8" />
+        <line x1="16" y1="0" x2="16" y2="2" stroke="#64748B" strokeWidth="0.6" />
+        <line x1="20" y1="0" x2="20" y2="3.5" stroke="#334155" strokeWidth="0.8" />
+        <line x1="24" y1="0" x2="24" y2="2" stroke="#64748B" strokeWidth="0.6" />
+        <line x1="28" y1="0" x2="28" y2="3.5" stroke="#334155" strokeWidth="0.8" />
+      </g>
     </g>
   </svg>
 );
@@ -330,6 +377,65 @@ export const CommonToolsIcon: React.FC<{ className?: string }> = ({ className = 
         {/* Wrench Jaw Cutout */}
         <path d="M45 12L50 18L55 12V20H45V12Z" fill="#F1F5F9" />
       </g>
+    </g>
+  </svg>
+);
+
+// 8. 退出程序: Standby / Safety Power Exit Icon
+export const ExitAppIcon: React.FC<{ className?: string }> = ({ className = 'w-16 h-16' }) => (
+  <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <defs>
+      <filter id="exitShadow" x="0" y="0" width="100" height="100" filterUnits="userSpaceOnUse">
+        <feDropShadow dx="0" dy="4" stdDeviation="3" floodColor="#991B1B" floodOpacity="0.28" />
+      </filter>
+      <linearGradient id="exitRed" x1="20" y1="16" x2="80" y2="84" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#EF4444" />
+        <stop offset="60%" stopColor="#DC2626" />
+        <stop offset="100%" stopColor="#991B1B" />
+      </linearGradient>
+      <linearGradient id="doorPlate" x1="16" y1="20" x2="60" y2="80" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="#F8FAFC" />
+        <stop offset="100%" stopColor="#CBD5E1" />
+      </linearGradient>
+    </defs>
+    <g filter="url(#exitShadow)">
+      {/* Outer Industrial Rounded Bezel / Base */}
+      <rect x="15" y="15" width="70" height="70" rx="18" fill="url(#exitRed)" />
+      {/* Inner Accent Ring */}
+      <rect x="18" y="18" width="64" height="64" rx="15" stroke="#FCA5A5" strokeWidth="1.5" strokeOpacity="0.5" fill="none" />
+
+      {/* Safety Doorway (Left side) */}
+      <path
+        d="M27 28C27 25.7909 28.7909 24 31 24H48C50.2091 24 52 25.7909 52 28V72C52 74.2091 50.2091 76 48 76H31C28.7909 76 27 74.2091 27 72V28Z"
+        fill="#7F1D1D"
+      />
+      {/* Door Leaf (Angled Open perspective) */}
+      <path
+        d="M30 26L48 30V70L30 74V26Z"
+        fill="url(#doorPlate)"
+        stroke="#FFFFFF"
+        strokeWidth="1.2"
+      />
+      {/* Door Handle */}
+      <circle cx="44" cy="50" r="2.2" fill="#DC2626" />
+
+      {/* Exit Dynamic Arrow (Outward from doorway to right) */}
+      <path
+        d="M48 50H74M74 50L64 40M74 50L64 60"
+        stroke="#FFFFFF"
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      {/* Glossy Top Arc Highlight */}
+      <path
+        d="M25 22C32 18 68 18 75 22"
+        stroke="#FFFFFF"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeOpacity="0.6"
+      />
     </g>
   </svg>
 );

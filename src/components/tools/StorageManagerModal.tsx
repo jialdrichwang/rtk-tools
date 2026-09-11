@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import {
   fileStorageService,
+  StorageFolder,
   StorageFolderInfo,
   StoredFileInfo,
 } from '../../utils/fileStorageService';
@@ -40,7 +41,7 @@ interface StorageManagerModalProps {
 export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({ isOpen, onClose }) => {
   const { points, tracks, projects, currentProject } = useSurveyData();
   const [folderStats, setFolderStats] = useState<StorageFolderInfo[]>([]);
-  const [selectedFolder, setSelectedFolder] = useState<'point' | 'track' | 'project' | 'mapdata'>('point');
+  const [selectedFolder, setSelectedFolder] = useState<StorageFolder>('point');
   const [fileList, setFileList] = useState<StoredFileInfo[]>([]);
   const [rootDir, setRootDir] = useState<string>(fileStorageService.getRootDir());
   const [isEditingRoot, setIsEditingRoot] = useState<boolean>(false);
@@ -66,7 +67,7 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({ isOpen
 
   if (!isOpen) return null;
 
-  const handleFolderClick = (folder: 'point' | 'track' | 'project' | 'mapdata') => {
+  const handleFolderClick = (folder: StorageFolder) => {
     soundService.playClick();
     setSelectedFolder(folder);
   };

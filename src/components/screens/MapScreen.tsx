@@ -20,6 +20,7 @@ import {
 import { soundService } from '../../utils/sound';
 import { offlineMapTileService } from '../../utils/offlineMapTileService';
 import { OfflineMapModal } from './OfflineMapModal';
+import { MapDisplayFilterControl } from '../common/MapDisplayFilterControl';
 import { MapLayerType, getMapTileUrl, getBingQuadKey, getBaiduTileCoords } from '../../utils/mapTileUrls';
 export { getMapTileUrl };
 export type { MapLayerType };
@@ -51,12 +52,24 @@ const CachedTileLayer = L.TileLayer.extend({
     tile.alt = '';
     tile.setAttribute('role', 'presentation');
 
-    // [USER REQ 3] Prioritize com.rtkproject.files/mapdata/ and IndexedDB; fallback to network download if not present
+    // [USER REQ 3 & 8] Prioritize com.rtkproject.files/mapdata/ & mapcache/
+    // Fallback to network, and automatically cache browsed tiles into mapdata/mapcache/ for portable offline use
     offlineMapTileService.getMapDataTileUrl(layerId, coords.z, coords.x, coords.y).then((localTileUrl) => {
       if (localTileUrl) {
         tile.src = localTileUrl;
       } else {
-        tile.src = this.getTileUrl(coords);
+        const netUrl = this.getTileUrl(coords);
+        tile.src = netUrl;
+
+        // Automatically cache browsed network tiles to mapdata/mapcache/
+        fetch(netUrl, { mode: 'cors' })
+          .then((res) => (res.ok ? res.blob() : null))
+          .then((blob) => {
+            if (blob && blob.size > 100) {
+              offlineMapTileService.cacheBrowsedTile(layerId, coords.z, coords.x, coords.y, blob);
+            }
+          })
+          .catch(() => {});
       }
     }).catch(() => {
       tile.src = this.getTileUrl(coords);
@@ -81,7 +94,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
   const routesLayerRef = useRef<L.LayerGroup | null>(null);
   const tracksLayerRef = useRef<L.LayerGroup | null>(null);
 
-  const { points, routes, tracks } = useSurveyData();
+  const { points, routes, tracks, activeRecording } = useSurveyData();
   const { rtkState, updatePosition, toggleGPSMode, fetchRealGPSPosition, fetchIpLocationPosition } = useRTK();
 
   const rtkStateRef = useRef(rtkState);
@@ -103,6 +116,78 @@ export const MapScreen: React.FC<MapScreenProps> = ({
   const [showOfflineModal, setShowOfflineModal] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isLocating, setIsLocating] = useState(false);
+
+  // [USER REQ] 航点与航迹主显示开关与勾选状态
+  const [showPoints, setShowPoints] = useState<boolean>(() => {
+    const saved = localStorage.getItem('rtk_map_show_points');
+    return saved !== 'false';
+  });
+
+  const [selectedPointIds, setSelectedPointIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rtk_map_selected_point_ids');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return points.map((p) => p.id);
+  });
+
+  const [showTracks, setShowTracks] = useState<boolean>(() => {
+    const saved = localStorage.getItem('rtk_map_show_tracks');
+    return saved !== 'false';
+  });
+
+  const [selectedTrackIds, setSelectedTrackIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rtk_map_selected_track_ids');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return tracks.map((t) => t.id);
+  });
+
+  const [showLiveRecording, setShowLiveRecording] = useState<boolean>(() => {
+    const saved = localStorage.getItem('rtk_map_show_live_track');
+    return saved !== 'false';
+  });
+
+  // Automatically keep newly marked points visible and clean up deleted points
+  useEffect(() => {
+    setSelectedPointIds((prev) => {
+      const prevSet = new Set(prev);
+      const newIds = points.filter((p) => !prevSet.has(p.id)).map((p) => p.id);
+      if (newIds.length > 0) {
+        const next = [...prev, ...newIds];
+        localStorage.setItem('rtk_map_selected_point_ids', JSON.stringify(next));
+        return next;
+      }
+      const validPointsSet = new Set(points.map((p) => p.id));
+      const cleaned = prev.filter((id) => validPointsSet.has(id));
+      if (cleaned.length !== prev.length) {
+        localStorage.setItem('rtk_map_selected_point_ids', JSON.stringify(cleaned));
+        return cleaned;
+      }
+      return prev;
+    });
+  }, [points]);
+
+  // Automatically keep newly recorded tracks visible and clean up deleted tracks
+  useEffect(() => {
+    setSelectedTrackIds((prev) => {
+      const prevSet = new Set(prev);
+      const newIds = tracks.filter((t) => !prevSet.has(t.id)).map((t) => t.id);
+      if (newIds.length > 0) {
+        const next = [...prev, ...newIds];
+        localStorage.setItem('rtk_map_selected_track_ids', JSON.stringify(next));
+        return next;
+      }
+      const validTracksSet = new Set(tracks.map((t) => t.id));
+      const cleaned = prev.filter((id) => validTracksSet.has(id));
+      if (cleaned.length !== prev.length) {
+        localStorage.setItem('rtk_map_selected_track_ids', JSON.stringify(cleaned));
+        return cleaned;
+      }
+      return prev;
+    });
+  }, [tracks]);
 
   useEffect(() => {
     localStorage.setItem('rtk_map_layer', mapLayer);
@@ -368,12 +453,18 @@ export const MapScreen: React.FC<MapScreenProps> = ({
     }
   }, [rtkState.currentLat, rtkState.currentLon, rtkState.heading, rtkState.hrms, mapLayer]);
 
-  // Render Survey Points on Map with exact coordinate projection
+  // Render Survey Points on Map with exact coordinate projection and visibility filtering
   useEffect(() => {
     if (!pointsLayerRef.current) return;
     pointsLayerRef.current.clearLayers();
 
-    points.forEach((pt) => {
+    // [USER REQ] 一键全关航点检查
+    if (!showPoints) return;
+
+    const selectedPointSet = new Set(selectedPointIds);
+    const visiblePoints = points.filter((pt) => selectedPointSet.has(pt.id));
+
+    visiblePoints.forEach((pt) => {
       const pinColor = pt.color || '#2563eb';
       const displayPos = getDisplayLatLng(pt.lat, pt.lon);
 
@@ -405,9 +496,9 @@ export const MapScreen: React.FC<MapScreenProps> = ({
 
       pointsLayerRef.current?.addLayer(marker);
     });
-  }, [points, mapLayer]);
+  }, [points, mapLayer, showPoints, selectedPointIds]);
 
-  // Render Routes and Tracks with coordinate alignment
+  // Render Routes and Tracks with coordinate alignment and visibility filtering
   useEffect(() => {
     if (!routesLayerRef.current) return;
     routesLayerRef.current.clearLayers();
@@ -432,18 +523,58 @@ export const MapScreen: React.FC<MapScreenProps> = ({
     if (!tracksLayerRef.current) return;
     tracksLayerRef.current.clearLayers();
 
-    tracks.forEach((tk) => {
-      if (tk.points.length >= 2) {
-        const latlngs: [number, number][] = tk.points.map((p) => getDisplayLatLng(p.lat, p.lon));
-        const polyline = L.polyline(latlngs, {
-          color: tk.color || '#0284c7',
-          weight: 3,
-          opacity: 0.9,
+    // [USER REQ] 一键全关航迹与指定航迹勾选渲染
+    if (showTracks) {
+      const selectedTrackSet = new Set(selectedTrackIds);
+      const visibleTracks = tracks.filter((tk) => selectedTrackSet.has(tk.id));
+
+      visibleTracks.forEach((tk) => {
+        if (tk.points.length >= 2) {
+          const latlngs: [number, number][] = tk.points.map((p) => getDisplayLatLng(p.lat, p.lon));
+          const polyline = L.polyline(latlngs, {
+            color: tk.color || '#0284c7',
+            weight: 3,
+            opacity: 0.9,
+          });
+          tracksLayerRef.current?.addLayer(polyline);
+        }
+      });
+
+      // Also render real-time recording track if recording in progress & enabled
+      if (showLiveRecording && activeRecording.isRecording && activeRecording.points.length >= 1) {
+        const latlngs: [number, number][] = activeRecording.points.map((p) =>
+          getDisplayLatLng(p.lat, p.lon)
+        );
+        if (latlngs.length >= 2) {
+          const halo = L.polyline(latlngs, {
+            color: '#ffffff',
+            weight: 6,
+            opacity: 0.85,
+          });
+          tracksLayerRef.current?.addLayer(halo);
+
+          const polyline = L.polyline(latlngs, {
+            color: '#0284c7',
+            weight: 4,
+            opacity: 0.95,
+          });
+          tracksLayerRef.current?.addLayer(polyline);
+        }
+
+        // Start pin for live recording
+        const startPt = activeRecording.points[0];
+        const startDisplayPos = getDisplayLatLng(startPt.lat, startPt.lon);
+        const startMarker = L.marker(startDisplayPos, {
+          icon: L.divIcon({
+            className: 'active-record-start-pin',
+            html: `<div style="background: #10b981; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; border: 1px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.5); white-space: nowrap;">🚩 航迹起点</div>`,
+            iconSize: [0, 0],
+          }),
         });
-        tracksLayerRef.current?.addLayer(polyline);
+        tracksLayerRef.current?.addLayer(startMarker);
       }
-    });
-  }, [routes, tracks, points, mapLayer]);
+    }
+  }, [routes, tracks, points, mapLayer, activeRecording, showTracks, selectedTrackIds, showLiveRecording]);
 
   // Re-center on receiver / real GPS locate
   const handleRecenterOrLocate = async () => {
@@ -600,6 +731,51 @@ export const MapScreen: React.FC<MapScreenProps> = ({
       {/* Leaflet Map Canvas */}
       <div ref={mapContainerRef} className="flex-1 w-full h-full relative z-0" />
 
+      {/* [USER REQ] Floating Left: 航点与航迹显示控制组 (一键全关 & 下拉多选/单选) */}
+      <div className="absolute top-14 left-3 z-20">
+        <MapDisplayFilterControl
+          points={points}
+          showPoints={showPoints}
+          selectedPointIds={selectedPointIds}
+          onToggleShowPoints={(show) => {
+            setShowPoints(show);
+            localStorage.setItem('rtk_map_show_points', String(show));
+            if (!show) {
+              setToastMsg('已一键全关主地图航点显示');
+            } else {
+              setToastMsg('已开启主地图航点显示');
+            }
+          }}
+          onSetSelectedPointIds={(ids) => {
+            setSelectedPointIds(ids);
+            localStorage.setItem('rtk_map_selected_point_ids', JSON.stringify(ids));
+          }}
+          tracks={tracks}
+          showTracks={showTracks}
+          selectedTrackIds={selectedTrackIds}
+          onToggleShowTracks={(show) => {
+            setShowTracks(show);
+            localStorage.setItem('rtk_map_show_tracks', String(show));
+            if (!show) {
+              setToastMsg('已一键全关主地图航迹显示');
+            } else {
+              setToastMsg('已开启主地图航迹显示');
+            }
+          }}
+          onSetSelectedTrackIds={(ids) => {
+            setSelectedTrackIds(ids);
+            localStorage.setItem('rtk_map_selected_track_ids', JSON.stringify(ids));
+          }}
+          isLiveRecording={activeRecording.isRecording}
+          liveRecordingPointCount={activeRecording.points.length}
+          showLiveRecording={showLiveRecording}
+          onToggleShowLiveRecording={(show) => {
+            setShowLiveRecording(show);
+            localStorage.setItem('rtk_map_show_live_track', String(show));
+          }}
+        />
+      </div>
+
       {/* Floating Right Map Controls */}
       <div className="absolute top-14 right-3 flex flex-col gap-2 z-10">
         {/* Compass widget */}
@@ -740,7 +916,13 @@ export const MapScreen: React.FC<MapScreenProps> = ({
           {rtkState.mode === 'real_gps' ? `🛰️ 真机 ${(rtkState.realGpsFrequencyHz || 4.0).toFixed(1)}Hz 锁定` : '🕹️ 点击地图取点'}
         </span>
         <span className="text-slate-300">|</span>
-        <span>标定: <b className="text-slate-900">{points.length}</b> 点</span>
+        <span>
+          航点: <b className="text-slate-900">{showPoints ? `${selectedPointIds.length}/${points.length}` : '全关'}</b>
+        </span>
+        <span className="text-slate-300">|</span>
+        <span>
+          航迹: <b className="text-slate-900">{showTracks ? `${selectedTrackIds.length}/${tracks.length}` : '全关'}</b>
+        </span>
       </div>
 
       {/* Offline Map Cache Manager Modal */}

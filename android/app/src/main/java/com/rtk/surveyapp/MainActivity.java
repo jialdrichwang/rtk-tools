@@ -1,6 +1,8 @@
 package com.rtk.surveyapp;
 
 import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -8,8 +10,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
-import android.webkit.GeolocationPermissions;
-import android.webkit.WebChromeClient;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
@@ -18,6 +19,9 @@ import com.getcapacitor.BridgeActivity;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
     private static final int PERMISSION_REQUEST_CODE = 1001;
@@ -33,7 +37,7 @@ public class MainActivity extends BridgeActivity {
         // 2. Ensure /storage/emulated/0/com.rtkproject.files directory structure exists
         createAppStorageDirectories();
 
-        // 3. Configure WebView to grant all Geolocation Permissions automatically without silent blocks
+        // 3. Configure WebSettings without overriding Capacitor's BridgeWebChromeClient (preserves onShowFileChooser)
         try {
             if (this.bridge != null && this.bridge.getWebView() != null) {
                 WebSettings settings = this.bridge.getWebView().getSettings();
@@ -41,17 +45,72 @@ public class MainActivity extends BridgeActivity {
                 settings.setDomStorageEnabled(true);
                 settings.setDatabaseEnabled(true);
                 settings.setJavaScriptEnabled(true);
+                try {
+                    settings.setGeolocationDatabasePath(getFilesDir().getPath());
+                } catch (Exception ignored) {}
+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
                 }
 
-                this.bridge.getWebView().setWebChromeClient(new WebChromeClient() {
-                    @Override
-                    public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
-                        // Always grant geolocation permission to the local application bundle
-                        callback.invoke(origin, true, false);
+                // 4. Expose AndroidBridge for complete exit & native Bluetooth querying
+                this.bridge.getWebView().addJavascriptInterface(new Object() {
+                    @JavascriptInterface
+                    public void exitApp() {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    finishAffinity(); // 彻底关闭所有界面
+                                    // 延迟 100ms 销毁进程，确保 finish 指令已触达系统
+                                    new android.os.Handler().postDelayed(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            System.exit(0); // 彻底杀死进程
+                                        }
+                                    }, 100);
+                                } catch (Exception e) {
+                                    System.exit(0);
+                                }
+                            }
+                        });
                     }
-                });
+
+                    @JavascriptInterface
+                    public String getBondedBluetoothDevices() {
+                        try {
+                            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+                            if (adapter != null && adapter.isEnabled()) {
+                                Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+                                JSONArray arr = new JSONArray();
+                                if (bonded != null) {
+                                    for (BluetoothDevice dev : bonded) {
+                                        JSONObject obj = new JSONObject();
+                                        obj.put("name", dev.getName() != null ? dev.getName() : "未知RTK设备");
+                                        obj.put("mac", dev.getAddress());
+                                        obj.put("type", "RTK");
+                                        obj.put("paired", true);
+                                        arr.put(obj);
+                                    }
+                                }
+                                return arr.toString();
+                            }
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                        return "[]";
+                    }
+
+                    @JavascriptInterface
+                    public boolean isBluetoothEnabled() {
+                        try {
+                            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+                            return adapter != null && adapter.isEnabled();
+                        } catch (Exception e) {
+                            return false;
+                        }
+                    }
+                }, "AndroidBridge");
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -80,7 +139,7 @@ public class MainActivity extends BridgeActivity {
                     appRoot.mkdirs();
                 }
 
-                String[] subFolders = new String[]{"point", "track", "project", "mapdata", "points", "tracks"};
+                String[] subFolders = new String[]{"point", "track", "project", "mapdata", "mapdata/mapcache", "points", "tracks"};
                 for (String folder : subFolders) {
                     File sub = new File(appRoot, folder);
                     if (!sub.exists()) {

@@ -284,6 +284,36 @@ export const TrackFileConvertModal: React.FC<TrackFileConvertModalProps> = ({
           {/* Source specific controls */}
           {sourceMode === 'external_file' && (
             <div className="space-y-2">
+              <div className="bg-gradient-to-r from-teal-500/10 to-cyan-500/10 border border-teal-300 rounded-2xl p-2.5 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-teal-950 block">免调文件选择器 · 剪贴板快速解析</span>
+                  <span className="text-[10px] text-slate-500">直接读取剪贴板中的 GPX / KML / CSV 文本</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    soundService.playClick();
+                    try {
+                      if (navigator.clipboard && navigator.clipboard.readText) {
+                        const text = await navigator.clipboard.readText();
+                        if (text && text.trim()) {
+                          parseRawTextToTrack(text, `剪贴板航迹_${new Date().toLocaleTimeString()}`);
+                          return;
+                        }
+                      }
+                      setSourceMode('text_paste');
+                      setStatusMessage({ type: 'error', text: '剪贴板为空，已为您打开文本框长按粘贴。' });
+                    } catch {
+                      setSourceMode('text_paste');
+                      setStatusMessage({ type: 'error', text: '无法读取剪贴板，请长按粘贴代码。' });
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 active:scale-95 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer transition"
+                >
+                  读取剪贴板
+                </button>
+              </div>
+
               <div
                 className="relative block rounded-2xl border-2 border-dashed border-teal-400 hover:border-teal-500 bg-teal-50/40 hover:bg-teal-50/70 p-4 flex flex-col items-center justify-center gap-2 text-xs font-bold text-slate-700 cursor-pointer transition shadow-2xs select-auto overflow-hidden group"
               >
@@ -291,7 +321,7 @@ export const TrackFileConvertModal: React.FC<TrackFileConvertModalProps> = ({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".gpx,.kml,.csv,.dat,.txt,application/gpx+xml,text/plain,text/csv,application/json"
+                  accept="*/*"
                   onChange={handleFileUpload}
                   onClick={(e) => {
                     (e.target as HTMLInputElement).value = '';
@@ -320,7 +350,7 @@ export const TrackFileConvertModal: React.FC<TrackFileConvertModalProps> = ({
                 </div>
                 <input
                   type="file"
-                  accept=".gpx,.kml,.csv,.dat,.txt,application/gpx+xml,text/plain,text/csv,application/json"
+                  accept="*/*"
                   onChange={handleFileUpload}
                   onClick={(e) => {
                     (e.target as HTMLInputElement).value = '';

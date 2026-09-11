@@ -38,15 +38,34 @@ import { UnitSettingsModal } from './components/tools/UnitSettingsModal';
 import { ExportImportModal } from './components/tools/ExportImportModal';
 import { HistoryDataImportModal } from './components/tools/HistoryDataImportModal';
 import { GpsPermissionPromptModal } from './components/tools/GpsPermissionPromptModal';
+import { BluetoothScannerModal } from './components/tools/BluetoothScannerModal';
+import { NmeaMonitorModal } from './components/tools/NmeaMonitorModal';
 
+import { App as CapApp } from '@capacitor/app';
 import { ScreenType, SurveyPoint } from './types';
 import { soundService } from './utils/sound';
 import { nativePermissionService } from './utils/nativePermissionService';
 import { fileStorageService } from './utils/fileStorageService';
 import { backgroundTrackingService } from './utils/backgroundTrackingService';
 
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+
+// Reliable app exit helper
+export const forceExitApplication = () => {
+  if ((window as any).AndroidBridge && typeof (window as any).AndroidBridge.exitApp === 'function') {
+    (window as any).AndroidBridge.exitApp();
+    return;
+  }
+  if (nativePermissionService.isNativePlatform()) {
+    CapApp.exitApp().catch(() => {});
+    return;
+  }
+  // On web/browser/preview iframe, never close the window to prevent blank white screen
+  console.log('App exit requested on web/browser platform');
+};
+
 function MainLayout() {
-  const { rtkState, fetchRealGPSPosition } = useRTK();
+  const { rtkState, fetchRealGPSPosition, setShowBluetoothModal } = useRTK();
   const { activeRecording, appendTrackPoint } = useSurveyData();
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('home');
   const [screenStack, setScreenStack] = useState<ScreenType[]>([]);
@@ -138,6 +157,82 @@ function MainLayout() {
     setActiveModal('export_import');
   };
 
+  // Double back press exit state
+  const [showExitPrompt, setShowExitPrompt] = useState(false);
+  const lastBackPressTimeRef = useRef(0);
+  const exitTimerRef = useRef<any>(null);
+
+  // Expose global handler for Android WebView's onBackPressed and Capacitor App backButton
+  useEffect(() => {
+    const handleBackAction = () => {
+      // 1. If modal is open, close modal
+      if (activeModal) {
+        setActiveModal(null);
+        return true; // handled
+      }
+
+      // 2. If inside a sub-screen, go back
+      if (currentScreen !== 'home') {
+        handleBack();
+        return true; // handled
+      }
+
+      // 3. In home screen: check double back press
+      const now = Date.now();
+      if (now - lastBackPressTimeRef.current < 2000) {
+        // Double pressed within 2s -> trigger immediate full exit
+        forceExitApplication();
+        return false;
+      }
+
+      // First press: prompt user
+      lastBackPressTimeRef.current = now;
+      setShowExitPrompt(true);
+      soundService.playClick();
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = setTimeout(() => {
+        setShowExitPrompt(false);
+      }, 2000);
+      return true; // handled, waiting for second back press
+    };
+
+    (window as any).handleAndroidBackPressed = handleBackAction;
+
+    // Listen to Capacitor native backButton events (Android physical/gesture back)
+    let backButtonListener: any = null;
+    if (nativePermissionService.isNativePlatform()) {
+      try {
+        CapApp.addListener('backButton', () => {
+          handleBackAction();
+        })
+          .then((handle) => {
+            backButtonListener = handle;
+          })
+          .catch(() => {});
+      } catch {}
+    }
+
+    // Safe popstate handler: only navigate back or close modal, never trigger force exit
+    const handlePopState = () => {
+      if (activeModal) {
+        setActiveModal(null);
+      } else if (currentScreen !== 'home') {
+        handleBack();
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      delete (window as any).handleAndroidBackPressed;
+      window.removeEventListener('popstate', handlePopState);
+      if (backButtonListener && typeof backButtonListener.remove === 'function') {
+        backButtonListener.remove();
+      }
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+    };
+  }, [activeModal, currentScreen, screenStack]);
+
   return (
     <div className="h-screen w-screen bg-[#F1F5F9] text-slate-800 flex flex-col overflow-hidden font-sans select-none">
       {/* Handheld RTK Controller Shell Container */}
@@ -155,9 +250,9 @@ function MainLayout() {
         />
 
         {/* Middle Body Area: Content + Side Toolbar */}
-        <div className="flex-1 flex overflow-hidden relative">
+        <div className="flex-1 flex overflow-hidden relative min-h-0 min-w-0">
           {/* Main Dynamic Screen Views */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden min-h-0 min-w-0">
             {currentScreen === 'home' && (
               <HomeScreen
                 onNavigate={navigateTo}
@@ -206,6 +301,8 @@ function MainLayout() {
                 onOpenPointLibrary={() => navigateTo('waypoint_list')}
                 onOpenExportTrack={() => navigateTo('tracks')}
                 onOpenHistoryImport={() => setActiveModal('history_data_import')}
+                onOpenNmeaMonitor={() => setActiveModal('nmea_monitor')}
+                onOpenBluetooth={() => setShowBluetoothModal(true)}
               />
             )}
 
@@ -348,18 +445,41 @@ function MainLayout() {
         <HistoryDataImportModal onClose={() => setActiveModal(null)} />
       )}
 
+      {/* External Bluetooth RTK GNSS Scanner Modal */}
+      <BluetoothScannerModal />
+
+      {/* NMEA-0183 Telemetry & Fake Connection Diagnosis Modal */}
+      {activeModal === 'nmea_monitor' && (
+        <NmeaMonitorModal
+          isOpen={true}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
       {/* GPS Permission Request & Diagnostic Prompt Modal */}
       <GpsPermissionPromptModal />
+
+      {/* Double back exit toast prompt */}
+      {showExitPrompt && (
+        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-[99999] bg-slate-900/90 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-2xl backdrop-blur-xs pointer-events-none flex items-center gap-2 animate-bounce">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>再按一次返回键退出程序</span>
+        </div>
+      )}
     </div>
   );
 }
 
 export default function App() {
   return (
-    <RTKProvider>
-      <SurveyDataProvider>
-        <MainLayout />
-      </SurveyDataProvider>
-    </RTKProvider>
+    <ErrorBoundary fallbackTitle="RTK 核心系统已保护">
+      <RTKProvider>
+        <SurveyDataProvider>
+          <ErrorBoundary fallbackTitle="RTK 主视图保护">
+            <MainLayout />
+          </ErrorBoundary>
+        </SurveyDataProvider>
+      </RTKProvider>
+    </ErrorBoundary>
   );
 }

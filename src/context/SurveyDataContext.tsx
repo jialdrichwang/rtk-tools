@@ -399,53 +399,91 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
   }, [activeRecording.isRecording]);
 
-  // Save active recording state to localStorage
+  // Save active recording state to localStorage safely
   useEffect(() => {
-    localStorage.setItem('rtk_active_recording', JSON.stringify(activeRecording));
+    try {
+      localStorage.setItem('rtk_active_recording', JSON.stringify(activeRecording));
+    } catch (e) {
+      console.warn('Safe localStorage write error for active recording:', e);
+    }
   }, [activeRecording]);
 
   // Sync soundService
   useEffect(() => {
-    soundService.setEnabled(unitSettings.audioBeep);
-  }, [unitSettings.audioBeep]);
+    soundService.setEnabled(unitSettings?.audioBeep ?? true);
+  }, [unitSettings?.audioBeep]);
 
   // Persist storage & mirror to /storage/emulated/0/com.rtkproject.files/
   useEffect(() => {
-    localStorage.setItem('rtk_projects', JSON.stringify(projects));
-    // Auto-save projects backup
-    fileStorageService.saveFile('project', 'projects_backup.json', JSON.stringify(projects, null, 2)).catch(() => {});
+    try {
+      localStorage.setItem('rtk_projects', JSON.stringify(projects));
+      // Auto-save projects backup
+      fileStorageService.saveFile('project', 'projects_backup.json', JSON.stringify(projects, null, 2)).catch(() => {});
+    } catch (e) {
+      console.warn('Safe storage write error for projects:', e);
+    }
   }, [projects]);
 
   useEffect(() => {
-    localStorage.setItem('rtk_current_proj_id', currentProject.id);
-  }, [currentProject]);
-
-  useEffect(() => {
-    localStorage.setItem('rtk_points', JSON.stringify(points));
-    // Persist current project point library in /storage/emulated/0/com.rtkproject.files/point/
-    if (points.length > 0) {
-      fileStorageService.saveFile('point', `${currentProject.name}_points.json`, JSON.stringify(points, null, 2), 'application/json').catch(() => {});
-      const summaryTxt = points.map((p, idx) => 
-        `${idx + 1},${p.name},${p.x.toFixed(4)},${p.y.toFixed(4)},${p.elevation.toFixed(4)},${p.code || 'GPS'},${p.createdAt}`
-      ).join('\n');
-      fileStorageService.saveFile('point', `${currentProject.name}_point.txt`, summaryTxt, 'text/plain;charset=utf-8').catch(() => {});
+    try {
+      if (currentProject?.id) {
+        localStorage.setItem('rtk_current_proj_id', currentProject.id);
+      }
+    } catch (e) {
+      console.warn('Safe storage write error for current_proj_id:', e);
     }
-  }, [points, currentProject.name]);
+  }, [currentProject?.id]);
 
   useEffect(() => {
-    localStorage.setItem('rtk_routes', JSON.stringify(routes));
+    try {
+      localStorage.setItem('rtk_points', JSON.stringify(points));
+      // Persist current project point library in /storage/emulated/0/com.rtkproject.files/point/
+      const projName = currentProject?.name || 'default_project';
+      if (Array.isArray(points) && points.length > 0) {
+        fileStorageService.saveFile('point', `${projName}_points.json`, JSON.stringify(points, null, 2), 'application/json').catch(() => {});
+        const summaryTxt = points.map((p, idx) => {
+          const xStr = typeof p.x === 'number' ? p.x.toFixed(4) : String(p.x || 0);
+          const yStr = typeof p.y === 'number' ? p.y.toFixed(4) : String(p.y || 0);
+          const zStr = typeof p.elevation === 'number' ? p.elevation.toFixed(4) : String(p.elevation || 0);
+          return `${idx + 1},${p.name || `PT${idx + 1}`},${xStr},${yStr},${zStr},${p.code || 'GPS'},${p.createdAt || ''}`;
+        }).join('\n');
+        fileStorageService.saveFile('point', `${projName}_point.txt`, summaryTxt, 'text/plain;charset=utf-8').catch(() => {});
+      }
+    } catch (e) {
+      console.warn('Safe storage write error for points:', e);
+    }
+  }, [points, currentProject?.name]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('rtk_routes', JSON.stringify(routes));
+    } catch (e) {
+      console.warn('Safe storage write error for routes:', e);
+    }
   }, [routes]);
 
   useEffect(() => {
-    localStorage.setItem('rtk_tracks', JSON.stringify(tracks));
+    try {
+      localStorage.setItem('rtk_tracks', JSON.stringify(tracks));
+    } catch (e) {
+      console.warn('Safe storage write error for tracks:', e);
+    }
   }, [tracks]);
 
   useEffect(() => {
-    localStorage.setItem('rtk_survey_logs', JSON.stringify(surveyLogs));
+    try {
+      localStorage.setItem('rtk_survey_logs', JSON.stringify(surveyLogs));
+    } catch (e) {
+      console.warn('Safe storage write error for survey logs:', e);
+    }
   }, [surveyLogs]);
 
   useEffect(() => {
-    localStorage.setItem('rtk_unit_settings', JSON.stringify(unitSettings));
+    try {
+      localStorage.setItem('rtk_unit_settings', JSON.stringify(unitSettings));
+    } catch (e) {
+      console.warn('Safe storage write error for unit settings:', e);
+    }
   }, [unitSettings]);
 
   // Name Generator Helpers

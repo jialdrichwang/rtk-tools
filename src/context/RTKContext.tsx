@@ -3,6 +3,7 @@ import { RTKState, RTKSolutionType, NtripConfig } from '../types';
 import { soundService } from '../utils/sound';
 import { nativePermissionService } from '../utils/nativePermissionService';
 import { calculateGpsCourse, haversineDistance } from '../utils/geodesy';
+import { generateNmeaPacket } from '../utils/nmeaGenerator';
 
 export interface BluetoothDeviceInfo {
   id: string;
@@ -14,6 +15,25 @@ export interface BluetoothDeviceInfo {
   paired: boolean;
   status: 'idle' | 'connecting' | 'connected';
   type: 'RTK' | 'TotalStation' | 'GNSS_Receiver';
+}
+
+export interface GpsMovementSamplingStats {
+  sampleCount: number;
+  displacementMeters: number;
+  currentSpeedMps: number;
+  lastSampleTime: number;
+  isMoving: boolean;
+  statusText: string;
+}
+
+export interface NmeaStreamState {
+  messages: string[];
+  hz: number;
+  bytesPerSec: number;
+  totalReceived: number;
+  isFakeConnection: boolean;
+  isPaused: boolean;
+  simulateFakeConnection: boolean;
 }
 
 interface RTKContextType {
@@ -43,6 +63,12 @@ interface RTKContextType {
   disconnectNtrip: () => void;
   hasBarometerSensor: boolean;
   setHasBarometerSensor: (has: boolean) => void;
+  nmeaStream: NmeaStreamState;
+  clearNmeaStream: () => void;
+  toggleNmeaPause: () => void;
+  setSimulateFakeConnection: (simulate: boolean) => void;
+  gpsSamplingStats: GpsMovementSamplingStats;
+  stepSimulateMovement: (distanceM?: number, directionDeg?: number) => void;
 }
 
 const defaultNtripConfig: NtripConfig = {
@@ -94,22 +120,42 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [rtkState, setRtkState] = useState<RTKState>(() => {
-    const saved = localStorage.getItem('rtk_toolkit_state');
     const baroSaved = localStorage.getItem('rtk_has_barometer') === 'true';
-    if (saved) {
-      try {
-        return {
-          ...initialRTKState,
-          ...JSON.parse(saved),
-          targetSamplingHz: 4,
-          hasBarometerSensor: baroSaved,
-        };
-      } catch {
-        return { ...initialRTKState, hasBarometerSensor: baroSaved };
+    try {
+      const saved = localStorage.getItem('rtk_toolkit_state');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            ...initialRTKState,
+            ...parsed,
+            currentLat: typeof parsed.currentLat === 'number' && !isNaN(parsed.currentLat) ? parsed.currentLat : initialRTKState.currentLat,
+            currentLon: typeof parsed.currentLon === 'number' && !isNaN(parsed.currentLon) ? parsed.currentLon : initialRTKState.currentLon,
+            currentAlt: typeof parsed.currentAlt === 'number' && !isNaN(parsed.currentAlt) ? parsed.currentAlt : initialRTKState.currentAlt,
+            hrms: typeof parsed.hrms === 'number' && !isNaN(parsed.hrms) ? parsed.hrms : initialRTKState.hrms,
+            vrms: typeof parsed.vrms === 'number' && !isNaN(parsed.vrms) ? parsed.vrms : initialRTKState.vrms,
+            pdop: typeof parsed.pdop === 'number' && !isNaN(parsed.pdop) ? parsed.pdop : initialRTKState.pdop,
+            hdop: typeof parsed.hdop === 'number' && !isNaN(parsed.hdop) ? parsed.hdop : initialRTKState.hdop,
+            heading: typeof parsed.heading === 'number' && !isNaN(parsed.heading) ? parsed.heading : initialRTKState.heading,
+            speed: typeof parsed.speed === 'number' && !isNaN(parsed.speed) ? parsed.speed : initialRTKState.speed,
+            pressure: typeof parsed.pressure === 'number' && !isNaN(parsed.pressure) ? parsed.pressure : initialRTKState.pressure,
+            satsUsed: typeof parsed.satsUsed === 'number' && !isNaN(parsed.satsUsed) ? parsed.satsUsed : initialRTKState.satsUsed,
+            satsTracked: typeof parsed.satsTracked === 'number' && !isNaN(parsed.satsTracked) ? parsed.satsTracked : initialRTKState.satsTracked,
+            targetSamplingHz: 4,
+            hasBarometerSensor: baroSaved,
+          };
+        }
       }
+    } catch (e) {
+      console.warn('Error reading rtk_toolkit_state:', e);
     }
     return { ...initialRTKState, hasBarometerSensor: baroSaved };
   });
+
+  const rtkStateRef = useRef<RTKState>(rtkState);
+  useEffect(() => {
+    rtkStateRef.current = rtkState;
+  }, [rtkState]);
 
   const setHasBarometerSensor = useCallback((has: boolean) => {
     localStorage.setItem('rtk_has_barometer', String(has));
@@ -140,13 +186,98 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [isNtripConnected, setIsNtripConnected] = useState(true);
 
-  // Save changes to localStorage
+  // NMEA Stream & Fake Connection Diagnosis (Requirement 5)
+  const [nmeaStream, setNmeaStream] = useState<NmeaStreamState>({
+    messages: [],
+    hz: 5.0,
+    bytesPerSec: 850,
+    totalReceived: 0,
+    isFakeConnection: false,
+    isPaused: false,
+    simulateFakeConnection: false,
+  });
+
+  // GPS Movement Sampling Statistics (Requirement 1)
+  const [gpsSamplingStats, setGpsSamplingStats] = useState<GpsMovementSamplingStats>({
+    sampleCount: 0,
+    displacementMeters: 0,
+    currentSpeedMps: 0,
+    lastSampleTime: Date.now(),
+    isMoving: false,
+    statusText: 'GPS移动采样就绪，请持机移动',
+  });
+
+  const lastNmeaReceivedTimeRef = useRef<number>(Date.now());
+  const isNmeaPausedRef = useRef<boolean>(false);
+  const simulateFakeConnectionRef = useRef<boolean>(false);
+
+  // NMEA 0183 live stream generator & fake connection detection
   useEffect(() => {
-    localStorage.setItem('rtk_toolkit_state', JSON.stringify(rtkState));
+    const interval = setInterval(() => {
+      const isSimulatingFake = simulateFakeConnectionRef.current;
+      if (isSimulatingFake) {
+        setNmeaStream((prev) => ({
+          ...prev,
+          hz: 0,
+          bytesPerSec: 0,
+          isFakeConnection: true,
+        }));
+        return;
+      }
+
+      if (isNmeaPausedRef.current) return;
+
+      const current = rtkStateRef.current;
+      const packet = generateNmeaPacket(current);
+      const newSentences = [packet.gga, packet.rmc, packet.vtg];
+      if (Math.random() > 0.5) {
+        newSentences.push(packet.gsaGps, packet.gsaBds);
+      }
+
+      const bytes = newSentences.reduce((acc, s) => acc + s.length + 2, 0);
+      lastNmeaReceivedTimeRef.current = Date.now();
+
+      setNmeaStream((prev) => {
+        const updated = [...prev.messages, ...newSentences];
+        if (updated.length > 80) {
+          updated.splice(0, updated.length - 80);
+        }
+        return {
+          ...prev,
+          messages: updated,
+          hz: 5.0,
+          bytesPerSec: Math.round(bytes * 5),
+          totalReceived: prev.totalReceived + newSentences.length,
+          isFakeConnection: false,
+        };
+      });
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Safe debounced persistence to prevent rapid writes or QuotaExceededError crashes
+  const saveStateTimeoutRef = useRef<any>(null);
+  useEffect(() => {
+    if (saveStateTimeoutRef.current) clearTimeout(saveStateTimeoutRef.current);
+    saveStateTimeoutRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem('rtk_toolkit_state', JSON.stringify(rtkState));
+      } catch (e) {
+        console.warn('Safe localStorage write error for rtk_toolkit_state:', e);
+      }
+    }, 800);
+    return () => {
+      if (saveStateTimeoutRef.current) clearTimeout(saveStateTimeoutRef.current);
+    };
   }, [rtkState]);
 
   useEffect(() => {
-    localStorage.setItem('rtk_ntrip_config', JSON.stringify(ntripConfig));
+    try {
+      localStorage.setItem('rtk_ntrip_config', JSON.stringify(ntripConfig));
+    } catch (e) {
+      console.warn('Safe localStorage write error for rtk_ntrip_config:', e);
+    }
   }, [ntripConfig]);
 
   // -----------------------------------------------------------------------------------
@@ -184,38 +315,102 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Update GPS Course Heading when location changes
+  // Update GPS Course Heading when location changes via movement displacement sampling (Requirement 1)
   const updateGpsCourse = useCallback((lat: number, lon: number, speed: number = 0) => {
+    const now = Date.now();
     if (prevGpsPosRef.current) {
       const prev = prevGpsPosRef.current;
       const dist = haversineDistance(prev.lat, prev.lon, lat, lon);
-      // If moved > 0.4 meters or speed > 0.3 m/s, calculate vector course
-      if (dist >= 0.4 || speed > 0.3) {
+      const dt = Math.max(0.1, (now - prev.time) / 1000);
+      const calculatedSpeed = speed > 0 ? speed : dist / dt;
+
+      // When moved >= 0.4 meters or speed >= 0.3 m/s, sample the displacement vector
+      if (dist >= 0.4 || calculatedSpeed >= 0.3) {
         const rawCourse = calculateGpsCourse(prev.lat, prev.lon, lat, lon);
-        
-        // Low-pass exponential smoothing filter for smooth compass rotation
+
+        // Circular vector exponential moving average filter
         let diff = rawCourse - smoothedHeadingRef.current;
         while (diff > 180) diff -= 360;
         while (diff < -180) diff += 360;
         const newHeading = (smoothedHeadingRef.current + diff * 0.45 + 360) % 360;
         smoothedHeadingRef.current = Math.round(newHeading * 10) / 10;
-        
+
         setGpsCourseHeading(smoothedHeadingRef.current);
+
+        setGpsSamplingStats((prevStats) => ({
+          sampleCount: prevStats.sampleCount + 1,
+          displacementMeters: Math.round((prevStats.displacementMeters + dist) * 10) / 10,
+          currentSpeedMps: Math.round(calculatedSpeed * 10) / 10,
+          lastSampleTime: now,
+          isMoving: true,
+          statusText: `GPS移动采样活跃 (位移 ${dist.toFixed(1)}m, 速度 ${calculatedSpeed.toFixed(1)}m/s)`,
+        }));
 
         // If no magnetometer is active, drive compass directly with GPS heading
         if (!hasMagnetometer || isUsingGpsHeading) {
           setRtkState((prev) => ({
             ...prev,
             heading: smoothedHeadingRef.current,
+            speed: Math.round(calculatedSpeed * 10) / 10,
           }));
         }
 
-        prevGpsPosRef.current = { lat, lon, time: Date.now() };
+        prevGpsPosRef.current = { lat, lon, time: now };
+      } else {
+        // Stationary check: if stationary for > 2.5s, keep last heading and update status
+        if (now - prev.time > 2500) {
+          setGpsSamplingStats((prevStats) => ({
+            ...prevStats,
+            isMoving: false,
+            currentSpeedMps: 0,
+            statusText: 'GPS移动采样驻留 (锁定最后运动航向，持机走动更新)',
+          }));
+        }
       }
     } else {
-      prevGpsPosRef.current = { lat, lon, time: Date.now() };
+      prevGpsPosRef.current = { lat, lon, time: now };
     }
   }, [hasMagnetometer, isUsingGpsHeading]);
+
+  // Step simulation for testing GPS movement sampling indoors
+  const stepSimulateMovement = useCallback((distanceM = 1.2, directionDeg?: number) => {
+    const bearing = directionDeg !== undefined ? directionDeg : (gpsCourseHeading + 12) % 360;
+    const rad = (bearing * Math.PI) / 180;
+    const dLat = (distanceM * Math.cos(rad)) / 111320;
+    const dLon = (distanceM * Math.sin(rad)) / (111320 * Math.cos((rtkState.currentLat * Math.PI) / 180));
+    const nextLat = rtkState.currentLat + dLat;
+    const nextLon = rtkState.currentLon + dLon;
+
+    soundService.playClick();
+    updateGpsCourse(nextLat, nextLon, 1.2);
+    setRtkState((prev) => ({
+      ...prev,
+      currentLat: nextLat,
+      currentLon: nextLon,
+      speed: 1.2,
+    }));
+  }, [gpsCourseHeading, rtkState.currentLat, rtkState.currentLon, updateGpsCourse]);
+
+  const clearNmeaStream = useCallback(() => {
+    soundService.playClick();
+    setNmeaStream((prev) => ({ ...prev, messages: [], totalReceived: 0 }));
+  }, []);
+
+  const toggleNmeaPause = useCallback(() => {
+    soundService.playClick();
+    isNmeaPausedRef.current = !isNmeaPausedRef.current;
+    setNmeaStream((prev) => ({ ...prev, isPaused: !prev.isPaused }));
+  }, []);
+
+  const setSimulateFakeConnection = useCallback((simulate: boolean) => {
+    soundService.playClick();
+    simulateFakeConnectionRef.current = simulate;
+    setNmeaStream((prev) => ({
+      ...prev,
+      simulateFakeConnection: simulate,
+      isFakeConnection: simulate,
+    }));
+  }, []);
 
   const setTargetSamplingHz = useCallback((hz: number) => {
     const validHz = Math.max(2.5, Math.min(10, hz));
@@ -757,6 +952,12 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         disconnectNtrip,
         hasBarometerSensor,
         setHasBarometerSensor,
+        nmeaStream,
+        clearNmeaStream,
+        toggleNmeaPause,
+        setSimulateFakeConnection,
+        gpsSamplingStats,
+        stepSimulateMovement,
       }}
     >
       {children}

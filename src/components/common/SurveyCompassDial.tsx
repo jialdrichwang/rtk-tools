@@ -10,14 +10,16 @@ interface SurveyCompassDialProps {
   dialRotation?: number; // optional controlled rotation (-180 to +180)
   onRotationChange?: (rotationDeg: number) => void;
   showForwardMarker?: boolean;
+  filterMode?: 'stable' | 'smooth' | 'direct';
+  onToggleFilter?: () => void;
 }
 
 /**
  * Authentic Geological and Surveying Compass Dial
- * Matches 指南针new.jpg:
- * 1. 罗盘刻度触摸旋转 (Touch-rotatable dial)
+ * Matches Chinese Geological Compass:
+ * 1. 罗盘外沿触屏360度循环旋转 (Touch-rotatable dial outer rim, infinite 360° cycle)
  * 2. 罗盘外沿顶部红三角，表示前进方向 (Red triangle at top outer rim for forward heading)
- * 3. 右手边触摸弧线，两端各表示顺逆转180° (Touch arc slider on right side, -180° to +180°)
+ * 3. 测绘滤波选项置于右上角原 罗盘-180 位置
  * 4. 南北指针指向地磁南北 (Needle points towards geomagnetic North/South on dial)
  * 5. 180 at top, 360 at bottom, 90 at left, 270 at right (geological transit scale)
  */
@@ -29,29 +31,32 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
   dialRotation: controlledRotation,
   onRotationChange,
   showForwardMarker = true,
+  filterMode = 'stable',
+  onToggleFilter,
 }) => {
   const [internalRotation, setInternalRotation] = useState(0);
   const currentRotation = controlledRotation !== undefined ? controlledRotation : internalRotation;
+  const currentRotationRef = useRef(currentRotation);
+  currentRotationRef.current = currentRotation;
 
   const updateRotation = useCallback(
     (rot: number) => {
-      // Clamp rotation between -180 and +180
-      const clamped = Math.max(-180, Math.min(180, Math.round(rot * 10) / 10));
+      // Continuous 360° cyclic rotation: normalize into -180° to +180°
+      let normalized = rot;
+      while (normalized > 180) normalized -= 360;
+      while (normalized <= -180) normalized += 360;
+      const rounded = Math.round(normalized * 10) / 10;
       if (controlledRotation === undefined) {
-        setInternalRotation(clamped);
+        setInternalRotation(rounded);
       }
-      onRotationChange?.(clamped);
+      onRotationChange?.(rounded);
     },
     [controlledRotation, onRotationChange]
   );
 
   const svgRef = useRef<SVGSVGElement>(null);
-  const isDraggingArc = useRef(false);
   const isDraggingDial = useRef(false);
-  const dialDragStart = useRef<{ pointerAngle: number; initialRotation: number }>({
-    pointerAngle: 0,
-    initialRotation: 0,
-  });
+  const lastAngleRef = useRef<number>(0);
 
   // SVG Geometry Settings
   const cx = 195;
@@ -60,40 +65,13 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
   const ringInnerR = 118;
   const boxInnerR = 94;
 
-  // Arc Slider Geometry (Right-Hand Touch Arc)
-  // An elegant circular arc on the right of the compass dial matching 指南针new.jpg
-  const arcCenter = { x: 260, y: 215 };
-  const arcRadius = 168;
-  const arcMinAngle = -62; // top: -180°
-  const arcMaxAngle = 62;  // bottom: +180°
-
-  // Calculate coordinates along arc for a given dial rotation (-180° to +180°)
-  const rotationToArcAngle = (rot: number) => {
-    const fraction = (rot - (-180)) / 360; // 0 (top) to 1 (bottom)
-    return arcMinAngle + fraction * (arcMaxAngle - arcMinAngle);
-  };
-
-  const currentArcAngle = rotationToArcAngle(currentRotation);
-  const thumbRad = (currentArcAngle * Math.PI) / 180;
-  const thumbX = arcCenter.x + arcRadius * Math.cos(thumbRad);
-  const thumbY = arcCenter.y + arcRadius * Math.sin(thumbRad);
-
-  // Arc path string
-  const startRad = (arcMinAngle * Math.PI) / 180;
-  const endRad = (arcMaxAngle * Math.PI) / 180;
-  const arcStartX = arcCenter.x + arcRadius * Math.cos(startRad);
-  const arcStartY = arcCenter.y + arcRadius * Math.sin(startRad);
-  const arcEndX = arcCenter.x + arcRadius * Math.cos(endRad);
-  const arcEndY = arcCenter.y + arcRadius * Math.sin(endRad);
-  const arcPath = `M ${arcStartX} ${arcStartY} A ${arcRadius} ${arcRadius} 0 0 1 ${arcEndX} ${arcEndY}`;
-
-  // Dial degrees formula:
-  // 0°/360° is TOP (12 o'clock, 北 N)
+  // Dial degrees formula matching Authentic Chinese Geological Transit:
+  // 180° is TOP (12 o'clock, 南 S)
   // 90° is LEFT (9 o'clock, 東 E)
-  // 180° is BOTTOM (6 o'clock, 南 S)
+  // 360° is BOTTOM (6 o'clock, 北 N)
   // 270° is RIGHT (3 o'clock, 西 W)
-  // Counter-clockwise azimuth scale ensures forward heading corresponds directly to North needle reading
-  const getScreenAngle = (deg: number) => (-90 - deg) * (Math.PI / 180);
+  // When forward sight is aimed at azimuth H, the magnetic North needle tip (red N) directly reads H on this scale!
+  const getScreenAngle = (deg: number) => (deg - 270) * (Math.PI / 180);
 
   // Generate ticks for dial scale
   const ticks = [];
@@ -114,17 +92,17 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
     let labelText = '';
     let isCardinal = false;
 
-    if (d === 0 || d === 360) {
+    if (d === 180) {
       showLabel = true;
-      labelText = '360';
+      labelText = '180';
       isCardinal = true;
     } else if (d === 90) {
       showLabel = true;
       labelText = '90';
       isCardinal = true;
-    } else if (d === 180) {
+    } else if (d === 0 || d === 360) {
       showLabel = true;
-      labelText = '180';
+      labelText = '360';
       isCardinal = true;
     } else if (d === 270) {
       showLabel = true;
@@ -154,7 +132,6 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
     });
   }
 
-  // Pointer interaction for Right-Side Touch Arc
   const getSvgCoordinates = (clientX: number, clientY: number) => {
     if (!svgRef.current) return { x: 0, y: 0 };
     const rect = svgRef.current.getBoundingClientRect();
@@ -163,65 +140,26 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
     return { x, y };
   };
 
-  const handleArcPointerDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    isDraggingArc.current = true;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-
-    const updateFromArcPointer = (clientX: number, clientY: number) => {
-      const { x, y } = getSvgCoordinates(clientX, clientY);
-      const angleRad = Math.atan2(y - arcCenter.y, x - arcCenter.x);
-      const angleDeg = (angleRad * 180) / Math.PI;
-      const clampedAngle = Math.max(arcMinAngle, Math.min(arcMaxAngle, angleDeg));
-      const fraction = (clampedAngle - arcMinAngle) / (arcMaxAngle - arcMinAngle);
-      const newRot = -180 + fraction * 360;
-      updateRotation(newRot);
-    };
-
-    updateFromArcPointer(e.clientX, e.clientY);
-
-    const handlePointerMove = (ev: PointerEvent) => {
-      if (!isDraggingArc.current) return;
-      updateFromArcPointer(ev.clientX, ev.clientY);
-    };
-
-    const handlePointerUp = () => {
-      isDraggingArc.current = false;
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-  };
-
-  // Pointer interaction for Touching and Rotating the Dial Directly
+  // Pointer interaction: 罗盘外沿触屏360度循环旋转
   const handleDialPointerDown = (e: React.PointerEvent) => {
-    const { x, y } = getSvgCoordinates(e.clientX, e.clientY);
-    if (x > 335) return; // Right side is reserved for arc slider
-
     e.preventDefault();
     isDraggingDial.current = true;
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
 
-    const startAngle = (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
-    dialDragStart.current = {
-      pointerAngle: startAngle,
-      initialRotation: currentRotation,
-    };
+    const { x, y } = getSvgCoordinates(e.clientX, e.clientY);
+    lastAngleRef.current = (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
 
     const handleDialMove = (ev: PointerEvent) => {
       if (!isDraggingDial.current) return;
       const coords = getSvgCoordinates(ev.clientX, ev.clientY);
       const currentAngle = (Math.atan2(coords.y - cy, coords.x - cx) * 180) / Math.PI;
-      let delta = currentAngle - dialDragStart.current.pointerAngle;
+      let delta = currentAngle - lastAngleRef.current;
+      // Handle the -180/180 radian wrap-around gracefully
       if (delta > 180) delta -= 360;
       if (delta < -180) delta += 360;
-      let targetRot = dialDragStart.current.initialRotation + delta;
-      if (targetRot > 180) targetRot = 180;
-      if (targetRot < -180) targetRot = -180;
-      updateRotation(targetRot);
+      lastAngleRef.current = currentAngle;
+
+      updateRotation(currentRotationRef.current + delta);
     };
 
     const handleDialUp = () => {
@@ -247,7 +185,7 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
         ref={svgRef}
         viewBox="0 0 460 420"
         style={{ width: `${size}px`, height: `${(size * 420) / 460}px`, maxWidth: '100%', maxHeight: '74vh' }}
-        className="drop-shadow-lg touch-none"
+        className="drop-shadow-lg touch-none overflow-visible"
       >
         <defs>
           <radialGradient id="compassPlate" cx="50%" cy="50%" r="50%">
@@ -260,27 +198,7 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           </filter>
         </defs>
 
-        {/* 1. Forward Heading Red Triangle at 12 o'clock outer rim (罗盘外沿顶部有一个红三角，表示前进方向) */}
-        {showForwardMarker && (
-          <g id="forward-heading-pointer" className="cursor-default" title="前进方向标志 (Forward Direction)">
-            {/* Extended Red Triangular Pointer pointing straight down to outer circle */}
-            <polygon
-              points={`${cx - 7},16 ${cx + 7},16 ${cx},60`}
-              fill="#DC2626"
-              stroke="#991B1B"
-              strokeWidth="0.8"
-            />
-            {/* Left highlight facet */}
-            <polygon
-              points={`${cx - 7},16 ${cx},16 ${cx},60`}
-              fill="#EF4444"
-            />
-            {/* Top subtle border cap */}
-            <rect x={cx - 7} y="13" width="14" height="3" rx="1" fill="#B91C1C" />
-          </g>
-        )}
-
-        {/* 2. Rotatable Dial Group (罗盘刻度触摸旋转，与指针完全脱离关联) */}
+        {/* 1. Rotatable Dial Group (罗盘刻度触摸旋转，与指针完全脱离关联) */}
         <g
           id="rotatable-compass-dial"
           transform={`rotate(${currentRotation}, ${cx}, ${cy})`}
@@ -290,6 +208,18 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           {/* Dial Baseplate */}
           <circle cx={cx} cy={cy} r={outerR + 5} fill="#FFFFFF" stroke="#334155" strokeWidth="2.2" />
           <circle cx={cx} cy={cy} r={outerR} fill="url(#compassPlate)" stroke="#94A3B8" strokeWidth="1" />
+
+          {/* 罗盘外沿触屏360度旋转触控感应环 (Outer Rim Touch Ring for 360° Cyclic Rotation) */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={outerR + 10}
+            fill="transparent"
+            stroke="#0284C7"
+            strokeWidth="24"
+            strokeOpacity="0.01"
+            className="cursor-grab active:cursor-grabbing"
+          />
 
           {/* Inner concentric rings */}
           <circle cx={cx} cy={cy} r={ringInnerR} fill="none" stroke="#475569" strokeWidth="1.5" />
@@ -324,61 +254,45 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
             </g>
           ))}
 
-          {/* 4 Cardinal Directions Yellow Badge Boxes */}
-          {/* 北 (360° / 0°) - Top (12 o'clock) */}
-          <rect x={cx - 13} y={cy - ringInnerR + 2} width="26" height="23" fill="#FEF08A" stroke="#475569" strokeWidth="1.2" />
-          <text x={cx} y={cy - ringInnerR + 13} textAnchor="middle" dominantBaseline="central" fill="#0F172A" fontSize="13" fontWeight="bold">
-            北
-          </text>
-          <text x={cx} y={cy - ringInnerR + 32} textAnchor="middle" dominantBaseline="central" fill="#DC2626" fontSize="11" fontWeight="extrabold">
-            N
-          </text>
-
-          {/* 南 (180°) - Bottom (6 o'clock) */}
-          <rect x={cx - 13} y={cy + ringInnerR - 25} width="26" height="23" fill="#FEF08A" stroke="#475569" strokeWidth="1.2" />
-          <text x={cx} y={cy + ringInnerR - 14} textAnchor="middle" dominantBaseline="central" fill="#0F172A" fontSize="13" fontWeight="bold">
+          {/* 4 Cardinal Directions Yellow Badge Boxes matching 中国地质罗盘: 东南西北用正黄 */}
+          {/* 南 (180°) - Top (12 o'clock) */}
+          <rect x={cx - 13} y={cy - ringInnerR + 2} width="26" height="23" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
+          <text x={cx} y={cy - ringInnerR + 13} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
             南
           </text>
-          <text x={cx} y={cy + ringInnerR - 33} textAnchor="middle" dominantBaseline="central" fill="#0284C7" fontSize="11" fontWeight="extrabold">
+          <text x={cx} y={cy - ringInnerR + 32} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
             S
           </text>
 
+          {/* 北 (360° / 0°) - Bottom (6 o'clock) */}
+          <rect x={cx - 13} y={cy + ringInnerR - 25} width="26" height="23" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
+          <text x={cx} y={cy + ringInnerR - 14} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
+            北
+          </text>
+          <text x={cx} y={cy + ringInnerR - 33} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
+            N
+          </text>
+
           {/* 東 (90°) - Left (9 o'clock) */}
-          <rect x={cx - ringInnerR + 2} y={cy - 12} width="23" height="24" fill="#FEF08A" stroke="#475569" strokeWidth="1.2" />
-          <text x={cx - ringInnerR + 13.5} y={cy} textAnchor="middle" dominantBaseline="central" fill="#0F172A" fontSize="13" fontWeight="bold">
+          <rect x={cx - ringInnerR + 2} y={cy - 12} width="23" height="24" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
+          <text x={cx - ringInnerR + 13.5} y={cy} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
             東
           </text>
-          <text x={cx - ringInnerR + 32} y={cy} textAnchor="middle" dominantBaseline="central" fill="#DC2626" fontSize="11" fontWeight="extrabold">
+          <text x={cx - ringInnerR + 32} y={cy} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
             E
           </text>
 
           {/* 西 (270°) - Right (3 o'clock) */}
-          <rect x={cx + ringInnerR - 25} y={cy - 12} width="23" height="24" fill="#FEF08A" stroke="#475569" strokeWidth="1.2" />
-          <text x={cx + ringInnerR - 13.5} y={cy} textAnchor="middle" dominantBaseline="central" fill="#0F172A" fontSize="13" fontWeight="bold">
+          <rect x={cx + ringInnerR - 25} y={cy - 12} width="23" height="24" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
+          <text x={cx + ringInnerR - 13.5} y={cy} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
             西
           </text>
-          <text x={cx + ringInnerR - 32} y={cy} textAnchor="middle" dominantBaseline="central" fill="#DC2626" fontSize="11" fontWeight="extrabold">
+          <text x={cx + ringInnerR - 32} y={cy} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
             W
           </text>
 
-          {/* 4 Quadrants: 東北, 東南, 西南, 西北 in Pink Boxes */}
-          {/* 東北 (Top-Left, ~045°) */}
-          {(() => {
-            const rad = getScreenAngle(45);
-            const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
-            const y = cy + ((ringInnerR + boxInnerR) / 2) * Math.sin(rad);
-            const rot = (rad * 180) / Math.PI + 90;
-            return (
-              <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
-                <rect x="-16" y="-10" width="32" height="20" fill="#FCA5A5" stroke="#991B1B" strokeWidth="1" />
-                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#991B1B" fontSize="10" fontWeight="bold">
-                  東北
-                </text>
-              </g>
-            );
-          })()}
-
-          {/* 東南 (Bottom-Left, ~135°) */}
+          {/* 4 Quadrants: 东南、西南、东北、西北用正红字底 (纯正红色背景，纯白粗体文字) */}
+          {/* 東南 (Top-Left, 135°, between 180 南 and 90 東) */}
           {(() => {
             const rad = getScreenAngle(135);
             const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
@@ -386,15 +300,15 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
             const rot = (rad * 180) / Math.PI + 90;
             return (
               <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
-                <rect x="-16" y="-10" width="32" height="20" fill="#FCA5A5" stroke="#991B1B" strokeWidth="1" />
-                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#991B1B" fontSize="10" fontWeight="bold">
+                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
+                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
                   東南
                 </text>
               </g>
             );
           })()}
 
-          {/* 西南 (Bottom-Right, ~225°) */}
+          {/* 西南 (Top-Right, 225°, between 180 南 and 270 西) */}
           {(() => {
             const rad = getScreenAngle(225);
             const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
@@ -402,15 +316,31 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
             const rot = (rad * 180) / Math.PI + 90;
             return (
               <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
-                <rect x="-16" y="-10" width="32" height="20" fill="#FCA5A5" stroke="#991B1B" strokeWidth="1" />
-                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#991B1B" fontSize="10" fontWeight="bold">
+                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
+                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
                   西南
                 </text>
               </g>
             );
           })()}
 
-          {/* 西北 (Top-Right, ~315°) */}
+          {/* 東北 (Bottom-Left, 45°, between 360 北 and 90 東) */}
+          {(() => {
+            const rad = getScreenAngle(45);
+            const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
+            const y = cy + ((ringInnerR + boxInnerR) / 2) * Math.sin(rad);
+            const rot = (rad * 180) / Math.PI + 90;
+            return (
+              <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
+                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
+                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
+                  東北
+                </text>
+              </g>
+            );
+          })()}
+
+          {/* 西北 (Bottom-Right, 315°, between 360 北 and 270 西) */}
           {(() => {
             const rad = getScreenAngle(315);
             const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
@@ -418,8 +348,8 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
             const rot = (rad * 180) / Math.PI + 90;
             return (
               <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
-                <rect x="-16" y="-10" width="32" height="20" fill="#FCA5A5" stroke="#991B1B" strokeWidth="1" />
-                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#991B1B" fontSize="10" fontWeight="bold">
+                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
+                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
                   西北
                 </text>
               </g>
@@ -432,26 +362,68 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           <line x1={cx} y1={cy - 24} x2={cx} y2={cy + 24} stroke="#DC2626" strokeWidth="2" />
         </g>
 
-        {/* 3. Dynamic Magnetic Needle (南北指针锁定地磁南北，刻度盘旋转时与指针脱关联) */}
+        {/* 3. Dynamic Magnetic Needle with Synchronously Rotating N and S Letters */}
         <g
           id="magnetic-needle"
           transform={`rotate(${needleAngleDeg}, ${cx}, ${cy})`}
-          className="transition-transform duration-100 ease-out pointer-events-none"
+          className="transition-transform duration-150 ease-out pointer-events-none"
         >
-          {/* Blue Needle Tail (Points to South / 6 o'clock in base orientation, length ~90px) */}
+          {/* Blue Needle Tail (Points to South / 6 o'clock in base orientation) */}
+          {/* South Stem */}
           <path
-            d={`M${cx - 4} ${cy} L${cx} ${cy + 92} L${cx + 4} ${cy} Z`}
+            d={`M${cx - 5} ${cy} L${cx - 2} ${cy + 78} L${cx + 2} ${cy + 78} L${cx + 5} ${cy} Z`}
             fill="#0284C7"
-            stroke="#0369A1"
-            strokeWidth="0.8"
           />
           <path
-            d={`M${cx} ${cy} L${cx} ${cy + 92} L${cx + 4} ${cy} Z`}
+            d={`M${cx} ${cy} L${cx + 2} ${cy + 78} L${cx + 5} ${cy} Z`}
             fill="#38BDF8"
           />
 
+          {/* Extended Blue Arrowhead (Tip reaches outer graduation rim at cy + 144) */}
+          <path
+            d={`M${cx - 9} ${cy + 76} L${cx} ${cy + 144} L${cx} ${cy + 86} Z`}
+            fill="#38BDF8"
+            stroke="#0284C7"
+            strokeWidth="0.7"
+          />
+          <path
+            d={`M${cx + 9} ${cy + 76} L${cx} ${cy + 144} L${cx} ${cy + 86} Z`}
+            fill="#0369A1"
+            stroke="#075985"
+            strokeWidth="0.7"
+          />
+          {/* White center ridge line for South pointer */}
+          <line
+            x1={cx}
+            y1={cy + 86}
+            x2={cx}
+            y2={cy + 144}
+            stroke="#FFFFFF"
+            strokeWidth="1"
+            strokeOpacity="0.9"
+          />
+
+          {/* 指针S字母向中心移动，靠近针尖膨大部 (移至 cy + 82，清晰美观不遮挡尖端) */}
+          <g transform={`translate(${cx}, ${cy + 82})`}>
+            <text
+              x="0"
+              y="0"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill="#0284C7"
+              stroke="#FFFFFF"
+              strokeWidth="2.8"
+              paintOrder="stroke"
+              fontSize="14"
+              fontWeight="900"
+              fontFamily="system-ui, -apple-system, sans-serif"
+            >
+              S
+            </text>
+          </g>
+
           {/* Red Needle Pointer (Pointing to North / 12 o'clock in base orientation) */}
-          {/* Stem */}
+          {/* North Stem */}
           <path
             d={`M${cx - 5} ${cy} L${cx - 2} ${cy - 78} L${cx + 2} ${cy - 78} L${cx + 5} ${cy} Z`}
             fill="#DC2626"
@@ -485,6 +457,25 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
             strokeOpacity="0.9"
           />
 
+          {/* 指针N字母向中心移动，靠近针尖膨大部 (移至 cy - 82，清晰美观不遮挡尖端) */}
+          <g transform={`translate(${cx}, ${cy - 82})`}>
+            <text
+              x="0"
+              y="0"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill="#DC2626"
+              stroke="#FFFFFF"
+              strokeWidth="2.8"
+              paintOrder="stroke"
+              fontSize="14"
+              fontWeight="900"
+              fontFamily="system-ui, -apple-system, sans-serif"
+            >
+              N
+            </text>
+          </g>
+
           {/* Center Needle Pivot & Jewel Bearing */}
           <circle cx={cx} cy={cy} r="10" fill="#0F172A" stroke="#E2E8F0" strokeWidth="2" />
           <path d={`M${cx - 7} ${cy} A 7 7 0 0 1 ${cx + 7} ${cy} Z`} fill="#DC2626" />
@@ -492,113 +483,119 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           <circle cx={cx} cy={cy} r="3" fill="#FFFFFF" />
         </g>
 
-        {/* 4. Right-Hand Touch Arc & Slider (右手边触摸弧线，两头顶各表示刻度盘顺逆转180) */}
-        <g id="right-hand-touch-arc">
-          {/* Top Label: 罗盘-180° (Clickable to rotate to -180°) */}
-          <g
-            className="cursor-pointer group active:opacity-75"
-            onClick={() => updateRotation(-180)}
-            title="点击快速逆转180°"
-          >
-            <text
-              x="400"
-              y="38"
-              textAnchor="middle"
-              dominantBaseline="central"
-              fill="#16A34A"
-              fontSize="13"
-              fontWeight="bold"
-              className="group-hover:fill-emerald-700 transition-colors"
-            >
-              罗盘-180°
-            </text>
-          </g>
+        {/* 3. Forward Heading Pointer at 12 o'clock outer rim (置于刻度盘上方渲染，绝不被表盘底色遮挡切平针尖) */}
+        {showForwardMarker && (
+          <g id="forward-heading-pointer" className="cursor-default pointer-events-none" filter="url(#dialShadow)">
+            <title>前进方向指针 (Forward Sighting Direction)</title>
+            {/* Forward text badge moved strictly to the right side of the needle arrow (右侧独立徽标，不遮挡箭头) */}
+            <g id="forward-text-label" transform={`translate(${cx + 26}, 18)`} className="pointer-events-auto">
+              <rect
+                x="0"
+                y="-11"
+                width="56"
+                height="18"
+                rx="4"
+                fill="#FEF2F2"
+                stroke="#F87171"
+                strokeWidth="1"
+              />
+              <text
+                x="28"
+                y="1.5"
+                textAnchor="middle"
+                fill="#DC2626"
+                fontSize="9.5"
+                fontWeight="900"
+                fontFamily="system-ui, -apple-system, sans-serif"
+                letterSpacing="0.5"
+              >
+                前进方向
+              </text>
+            </g>
 
-          {/* Touch Arc Curve (Solid black curved track) */}
-          {/* Wide invisible hit area for easy finger grabbing */}
-          <path
-            d={arcPath}
-            fill="none"
-            stroke="transparent"
-            strokeWidth="36"
-            onPointerDown={handleArcPointerDown}
-            className="cursor-pointer"
-          />
-          {/* Visible arc stroke */}
-          <path
-            d={arcPath}
-            fill="none"
-            stroke="#0F172A"
-            strokeWidth="3"
-            strokeLinecap="round"
-            onPointerDown={handleArcPointerDown}
-            className="cursor-pointer pointer-events-none"
-          />
-
-          {/* Bottom Label: 罗盘+180° (Clickable to rotate to +180°) */}
-          <g
-            className="cursor-pointer group active:opacity-75"
-            onClick={() => updateRotation(180)}
-            title="点击快速顺转180°"
-          >
-            <text
-              x="400"
-              y="396"
-              textAnchor="middle"
-              dominantBaseline="central"
-              fill="#16A34A"
-              fontSize="13"
-              fontWeight="bold"
-              className="group-hover:fill-emerald-700 transition-colors"
-            >
-              罗盘+180°
-            </text>
-          </g>
-
-          {/* Amber Golden Slider Thumb (🟡 Draggable along the touch arc) */}
-          <g
-            id="arc-slider-thumb"
-            transform={`translate(${thumbX}, ${thumbY})`}
-            onPointerDown={handleArcPointerDown}
-            onDoubleClick={() => updateRotation(0)}
-            className="cursor-grab active:cursor-grabbing group"
-            title="按住上下滑动旋转刻度盘，双击归零"
-          >
-            {/* Extended invisible touch hit area */}
-            <circle cx="0" cy="0" r="22" fill="transparent" />
-
-            {/* Amber/Yellow Circular Thumb Button matching 指南针new.jpg */}
-            <circle
-              cx="0"
-              cy="0"
-              r="13"
-              fill="#F59E0B"
-              stroke="#D97706"
-              strokeWidth="2"
-              className="group-hover:fill-amber-400 group-hover:stroke-amber-600 transition-all shadow-md group-active:scale-110"
+            {/* Slender ultra-sharp needle-like arrow body (顶部与底部双向锐利细尖针样结构，顶部针尖绝无任何横向平切与遮挡) */}
+            {/* Left facet: from top sharp apex at (cx, 6) tapering down via wing (cx-5, 23) to bottom sharp apex at (cx, 63.5) */}
+            <path
+              d={`M${cx} 6 L${cx - 5} 23 L${cx - 1.2} 26 L${cx} 63.5 Z`}
+              fill="#DC2626"
+              stroke="#991B1B"
+              strokeWidth="0.6"
+              strokeLinejoin="miter"
+              strokeMiterlimit="10"
             />
-            {/* Center grip line/indicator */}
-            <line x1="-5" y1="0" x2="5" y2="0" stroke="#78350F" strokeWidth="1.8" strokeLinecap="round" />
-            <circle cx="0" cy="0" r="1.5" fill="#78350F" />
+            {/* Right facet: from top sharp apex at (cx, 6) tapering down via wing (cx+5, 23) to bottom sharp apex at (cx, 63.5) */}
+            <path
+              d={`M${cx} 6 L${cx + 5} 23 L${cx + 1.2} 26 L${cx} 63.5 Z`}
+              fill="#EF4444"
+              stroke="#DC2626"
+              strokeWidth="0.6"
+              strokeLinejoin="miter"
+              strokeMiterlimit="10"
+            />
+            {/* Center optical sighting ridge line extending directly between the two sharp needle tips */}
+            <line
+              x1={cx}
+              y1={6}
+              x2={cx}
+              y2={63.5}
+              stroke="#FFFFFF"
+              strokeWidth="0.8"
+              strokeOpacity="0.95"
+              strokeLinecap="round"
+            />
           </g>
-        </g>
-      </svg>
-
-      {/* Rotation Status Bar with Quick Reset Button */}
-      <div className="flex items-center gap-2 mt-1 text-xs">
-        <span className="text-slate-500 font-mono">
-          刻度偏角: <b className="text-slate-800 font-bold">{currentRotation > 0 ? `+${currentRotation}` : currentRotation}°</b>
-        </span>
-        {currentRotation !== 0 && (
-          <button
-            onClick={() => updateRotation(0)}
-            className="px-2 py-0.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold border border-slate-300 transition cursor-pointer shadow-2xs"
-            title="刻度盘旋转归零"
-          >
-            归零
-          </button>
         )}
-      </div>
+
+        {/* 4. 测绘滤波选项 (移至原 罗盘-180° 位置，去除右侧滑杆与罗盘-180文字) */}
+        {onToggleFilter && (
+          <g
+            id="survey-filter-mode-button"
+            className="cursor-pointer select-none group"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFilter();
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+            }}
+          >
+            <title>点击切换测绘滤波算法 (极稳 / 平滑 / 直读)</title>
+            {/* Pill button matching 罗盘-180° location */}
+            <rect
+              x="326"
+              y="18"
+              width="128"
+              height="36"
+              rx="12"
+              fill={filterMode === 'stable' ? '#F5F3FF' : filterMode === 'smooth' ? '#EEF2FF' : '#F8FAFC'}
+              stroke={filterMode === 'stable' ? '#C084FC' : filterMode === 'smooth' ? '#818CF8' : '#CBD5E1'}
+              strokeWidth="1.5"
+              filter="url(#dialShadow)"
+              className="group-hover:stroke-purple-600 transition-colors"
+            />
+            {/* Mode indicator dot */}
+            <circle
+              cx="342"
+              cy="36"
+              r="4.5"
+              fill={filterMode === 'stable' ? '#7C3AED' : filterMode === 'smooth' ? '#4F46E5' : '#64748B'}
+            />
+            {/* Filter mode label text */}
+            <text
+              x="392"
+              y="36.5"
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill={filterMode === 'stable' ? '#6D28D9' : filterMode === 'smooth' ? '#4338CA' : '#334155'}
+              fontSize="11.5"
+              fontWeight="900"
+              fontFamily="system-ui, -apple-system, sans-serif"
+            >
+              {filterMode === 'stable' ? '🛡️ 测绘极稳滤波' : filterMode === 'smooth' ? '✨ 智能平滑' : '⚡ 直读滤波'}
+            </text>
+          </g>
+        )}
+      </svg>
     </div>
   );
 };
