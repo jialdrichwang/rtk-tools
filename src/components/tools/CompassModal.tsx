@@ -7,17 +7,22 @@ import {
   AlertTriangle,
   CheckCircle2,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Navigation,
   Radio,
   Sliders,
   SlidersHorizontal,
   ChevronDown,
+  Globe,
+  HelpCircle,
 } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 import { SurveyCompassDial } from '../common/SurveyCompassDial';
 import { StandardCompassDial } from '../common/StandardCompassDial';
 import { MagneticFieldGraph } from './MagneticFieldGraph';
+import { SpatialMagneticCalibrationModal } from './SpatialMagneticCalibrationModal';
+import { spatialMagneticService } from '../../utils/spatialMagneticService';
 import { Footprints, MapPin, Gauge } from 'lucide-react';
 
 interface CompassModalProps {
@@ -46,6 +51,9 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
   const [filterMode, setFilterMode] = useState<'stable' | 'smooth' | 'direct'>('stable');
   // Second page (drawer/page) popup state for detailed diagnostics, calibration & curve
   const [showSecondPage, setShowSecondPage] = useState(false);
+  // Spatial Magnetic Analysis & Calibration Modal state
+  const [showSpatialCalibModal, setShowSpatialCalibModal] = useState(false);
+  const [calibRefreshKey, setCalibRefreshKey] = useState(0);
 
   // Viewport landscape orientation state to adapt layout dynamically for horizontal mobile & tablets
   const [isLandscape, setIsLandscape] = useState(
@@ -189,12 +197,28 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
 
   if (!isOpen) return null;
 
+  // Spatial calibration parameters inspection
+  const baselineData = spatialMagneticService.getBaselineData();
+  const fieldData = spatialMagneticService.getFieldData();
+  const hasSpatialCalibration = !!baselineData;
+  const hasFieldAdaptive = !!fieldData;
+
   // In 'mag_lock' mode, heading is strictly locked to geomagnetic North/South
   // and does NOT follow GPS motion course!
   const isGpsMode = headingMode === 'gps_course';
-  const activeHeading = isGpsMode
+  const baseRawHeading = isGpsMode
     ? (gpsCourseHeading || rtkState.heading || heading || 0)
     : heading;
+
+  // Compute spatial calibrated heading (including phone hard-iron offset, physical offset, field anomaly, and polar GPS fusion)
+  const calibratedResult = spatialMagneticService.computeCalibratedHeading(
+    baseRawHeading,
+    gpsCourseHeading || rtkState.heading,
+    rtkState.currentLat,
+    rtkState.currentLon
+  );
+
+  const activeHeading = calibratedResult.heading;
 
   // Handle 8-figure calibration
   const startCalibration = () => {
@@ -237,6 +261,24 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
         label: 'GPS 卫星运动矢量推算 (跟随移动方向)',
         color: 'text-blue-700 bg-blue-50 border-blue-200',
         icon: Navigation,
+      };
+    }
+    if (calibratedResult.polarState.isPolarRegion) {
+      return {
+        level: 'polar',
+        label: `极区高纬地磁衰减：已启动 GPS 运动真北动态融合 (${calibratedResult.polarState.statusDescription})`,
+        color: 'text-amber-800 bg-amber-50 border-amber-300',
+        icon: Globe,
+      };
+    }
+    if (hasSpatialCalibration && (hasFieldAdaptive || magneticField >= 38)) {
+      return {
+        level: 'good',
+        label: hasFieldAdaptive
+          ? '地磁锁定正常：已应用手机本性硬磁解耦与现场工区自适应纠偏'
+          : '地磁锁定正常：已应用手机本性硬磁解耦与物理指南针标定',
+        color: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+        icon: ShieldCheck,
       };
     }
     if (magneticField >= 40 && magneticField <= 58) {
@@ -330,33 +372,80 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
             </button>
           </div>
 
-          <div className="text-[11px] text-slate-500 font-medium flex items-center gap-1 pr-1">
-            <span>外沿触屏360°旋转</span>
+          <div className="flex items-center gap-1.5 pr-1">
+            {/* 空间磁力分析与全机型精准校准向导入口 */}
+            <button
+              type="button"
+              onClick={() => {
+                soundService.playClick();
+                setShowSpatialCalibModal(true);
+              }}
+              className={`px-2 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 leading-none border ${
+                hasSpatialCalibration
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 shadow-2xs'
+                  : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50 shadow-2xs'
+              }`}
+              title="空间磁力分析动作（外展上臂水平360°+垂直360°）与全机型精准校准向导"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 shrink-0 ${hasSpatialCalibration ? 'text-emerald-600' : 'text-blue-600'}`} />
+              <span>
+                {hasSpatialCalibration
+                  ? (hasFieldAdaptive ? '工区自适应' : '本性已校准')
+                  : '空间磁力校准'}
+              </span>
+              {calibratedResult.polarState.isPolarRegion && (
+                <span className="text-[9px] bg-amber-200 text-amber-900 px-1 py-0.2 rounded font-mono font-medium leading-none">
+                  极区
+                </span>
+              )}
+            </button>
+            <span className="text-[11px] text-slate-400 font-normal hidden sm:inline">外沿触屏阻尼旋转</span>
           </div>
         </div>
 
-        {/* 顶部航向度数与偏角快捷状态指示栏 */}
-        <div className="bg-white px-3.5 py-1.5 flex items-center justify-between border-b border-slate-200/80 text-xs sm:text-sm gap-2 shrink-0">
-          {/* 左侧：航向度数与主方位 */}
-          <div className="flex items-center gap-2">
-            <span className="text-2xl sm:text-3xl font-black font-mono text-slate-900 tracking-tight leading-none">
-              {Math.round(activeHeading)}°
-            </span>
-            <span className="text-xs sm:text-sm font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 leading-none">
-              {getDirectionText(activeHeading)}
-            </span>
+        {/* [USER REQ] 第二行：在地磁锁定、运动航向下一行恢复“切换为标准航向罗盘”与“4分刻度与12分刻度”按钮 */}
+        <div className="bg-slate-50/95 px-3 py-1.5 flex items-center justify-between border-b border-slate-200 text-xs gap-2 shrink-0 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {/* 切换为标准航向罗盘 / 切换为地质罗盘 */}
+            <button
+              type="button"
+              onClick={() => {
+                soundService.playClick();
+                setDialStyle((prev) => (prev === 'survey_transit' ? 'standard' : 'survey_transit'));
+              }}
+              className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white hover:bg-slate-100 active:scale-95 text-slate-700 border border-slate-300 shadow-2xs transition cursor-pointer flex items-center gap-1 leading-none"
+              title={dialStyle === 'survey_transit' ? '切换为标准航向罗盘' : '切换为地质罗盘'}
+            >
+              <CompassIcon className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span>{dialStyle === 'survey_transit' ? '切换为标准航向罗盘' : '切换为地质罗盘'}</span>
+            </button>
+
+            {/* 4分刻度与12分刻度切换按钮 (原主象限刻度、30度细分改为4分刻度与12分刻度) */}
+            <button
+              type="button"
+              onClick={() => {
+                soundService.playClick();
+                setNumberMode((prev) => (prev === 'cardinal' ? 'steps30' : 'cardinal'));
+              }}
+              className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white hover:bg-slate-100 active:scale-95 text-slate-700 border border-slate-300 shadow-2xs transition cursor-pointer flex items-center gap-1 leading-none"
+              title="切换4分刻度与12分刻度"
+            >
+              <span>{numberMode === 'cardinal' ? '切换为12分刻度' : '切换为4分刻度'}</span>
+              <span className="text-[10px] font-mono px-1 py-0.2 bg-blue-100 text-blue-800 rounded font-semibold ml-0.5">
+                {numberMode === 'cardinal' ? '4分刻度' : '12分刻度'}
+              </span>
+            </button>
           </div>
 
           {/* 右侧：刻度偏角快捷状态与归零 */}
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
-            {/* 刻度偏角 */}
             <div
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-mono transition ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-mono transition leading-none ${
                 dialRotation !== 0
                   ? 'bg-blue-50 border-blue-200 text-blue-800 font-bold'
-                  : 'bg-slate-50 border-slate-200 text-slate-600'
+                  : 'bg-white border-slate-200 text-slate-600'
               }`}
-              title="罗盘刻度偏角 (可直接在罗盘外沿触屏360度循环旋转)"
+              title="罗盘刻度偏角 (可直接在罗盘外沿触屏360度阻尼旋转)"
             >
               <span className="font-sans text-[11px] text-slate-500 font-normal">刻度偏角:</span>
               <span>{dialRotation > 0 ? `+${dialRotation.toFixed(1)}°` : `${dialRotation.toFixed(1)}°`}</span>
@@ -374,6 +463,18 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                 </button>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* [USER REQ] 航向数值居中显示 */}
+        <div className="bg-white px-3.5 py-1.5 flex items-center justify-center border-b border-slate-200/80 text-center shrink-0">
+          <div className="flex items-center justify-center gap-2.5">
+            <span className="text-2xl sm:text-3xl font-black font-mono text-slate-900 tracking-tight leading-none">
+              {Math.round(activeHeading)}°
+            </span>
+            <span className="text-xs sm:text-sm font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-lg border border-blue-100 leading-none">
+              {getDirectionText(activeHeading)}
+            </span>
           </div>
         </div>
 
@@ -518,7 +619,62 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                 </div>
               )}
 
-              {/* 5. 8字校准罗盘卡片 */}
+              {/* 5. 空间磁力分析动作与全机型精准校准卡片 */}
+              <div className="w-full shrink-0 bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200/90 rounded-2xl p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 rounded-xl bg-blue-600 text-white shadow-2xs">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-blue-950 flex items-center gap-1.5">
+                        <span>空间磁力分析动作与全机型精准校准</span>
+                        <span className="text-[10px] bg-blue-200 text-blue-900 font-mono px-1.5 py-0.2 rounded-full font-bold">
+                          工程推荐
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-blue-800/80 mt-0.5">
+                        外展上臂转身360°+垂直轮臂360° · 解耦手机固有硬磁 · 物理罗盘标定 · 极区GPS融合
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="bg-white/90 p-2 rounded-xl border border-blue-100">
+                    <div className="text-slate-500 font-sans">手机本性档案:</div>
+                    <div className="font-bold font-mono text-slate-800 mt-0.5 truncate">
+                      {hasSpatialCalibration
+                        ? `已标定 (${baselineData?.qualityScore}分, 偏差${baselineData?.physicalCompassOffset || 0}°)`
+                        : '未标定 (建议首次做本性分析)'}
+                    </div>
+                  </div>
+                  <div className="bg-white/90 p-2 rounded-xl border border-blue-100">
+                    <div className="text-slate-500 font-sans">工区自适应/极区:</div>
+                    <div className="font-bold font-mono text-slate-800 mt-0.5 truncate">
+                      {calibratedResult.polarState.isPolarRegion
+                        ? '极区GPS融合保护中'
+                        : hasFieldAdaptive
+                        ? '现场磁异常已纠偏'
+                        : '基准正常'}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundService.playClick();
+                    setShowSpatialCalibModal(true);
+                  }}
+                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-2xs transition cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>打开“空间磁力分析与校准”向导</span>
+                </button>
+              </div>
+
+              {/* 6. 基础 8字校准罗盘卡片 */}
               <div className="w-full shrink-0">
                 {isCalibrating ? (
                   <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-200">
@@ -592,6 +748,16 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
             </div>
           </div>
         )}
+        {/* 空间磁力分析动作与全机型精准校准向导弹窗 */}
+        <SpatialMagneticCalibrationModal
+          isOpen={showSpatialCalibModal}
+          onClose={() => setShowSpatialCalibModal(false)}
+          currentHeading={heading}
+          currentLat={rtkState.currentLat || 31.23}
+          currentLon={rtkState.currentLon || 121.47}
+          gpsCourse={gpsCourseHeading || rtkState.heading}
+          onCalibrationUpdated={() => setCalibRefreshKey((k) => k + 1)}
+        />
       </div>
     </div>
   );

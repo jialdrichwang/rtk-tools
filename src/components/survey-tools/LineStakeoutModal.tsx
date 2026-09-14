@@ -2,7 +2,12 @@ import React, { useState, useMemo } from 'react';
 import { useSurveyData } from '../../context/SurveyDataContext';
 import { useRTK } from '../../context/RTKContext';
 import { latLonToGauss, calculateLineStakeout, calculateDistanceAndAzimuth } from '../../utils/geodesy';
-import { GitCommit, Split, ArrowLeft, ArrowRight, X, Compass, Navigation, MapPin } from 'lucide-react';
+import {
+  fileStorageService,
+  generateSurveySequentialName,
+  ENGINEERING_SURVEY_SUBPATHS,
+} from '../../utils/fileStorageService';
+import { GitCommit, Split, ArrowLeft, ArrowRight, X, Compass, Navigation, MapPin, Save, Check } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 
 interface LineStakeoutModalProps {
@@ -16,6 +21,7 @@ export const LineStakeoutModal: React.FC<LineStakeoutModalProps> = ({
 }) => {
   const { points, currentProject } = useSurveyData();
   const { rtkState } = useRTK();
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   const [startPointId, setStartPointId] = useState<string>(points[0]?.id || '');
   const [endPointId, setEndPointId] = useState<string>(points[1]?.id || points[0]?.id || '');
@@ -133,6 +139,53 @@ export const LineStakeoutModal: React.FC<LineStakeoutModalProps> = ({
       canvasOrigin,
     };
   }, [p1, p2, currGauss]);
+
+  const handleSaveStakeout = () => {
+    soundService.playSuccess();
+    const prefix = isEquidistant ? 'Isometric setting-out results' : 'Linear setting-out results';
+    const subpath = isEquidistant
+      ? ENGINEERING_SURVEY_SUBPATHS.ISOMETRIC_SETTING_OUT
+      : ENGINEERING_SURVEY_SUBPATHS.LINEAR_SETTING_OUT;
+
+    const resultName = generateSurveySequentialName(prefix, points.map((p) => p.name));
+
+    const stakeRecord = {
+      resultName,
+      stakeoutType: isEquidistant ? 'ISOMETRIC_STAKEOUT' : 'LINEAR_STAKEOUT',
+      baseline: {
+        p1: p1 ? { id: p1.id, name: p1.name, x: p1.x, y: p1.y } : null,
+        p2: p2 ? { id: p2.id, name: p2.name, x: p2.x, y: p2.y } : null,
+        totalLength: baselineInfo?.distance || 0,
+        azimuth: baselineInfo?.azimuth || 0,
+      },
+      actualMeasurement: {
+        x: currGauss.x,
+        y: currGauss.y,
+        elevation: rtkState.currentAlt,
+        lat: rtkState.currentLat,
+        lon: rtkState.currentLon,
+        hrms: rtkState.hrms,
+        vrms: rtkState.vrms,
+        solution: rtkState.solution,
+      },
+      deviation: lineResult ? {
+        chainage: lineResult.chainage,
+        offset: lineResult.offset,
+      } : null,
+      timestamp: new Date().toISOString(),
+      projectName: currentProject.name,
+    };
+
+    fileStorageService.saveProjectFile(
+      currentProject.name,
+      subpath,
+      `${resultName}.json`,
+      JSON.stringify(stakeRecord, null, 2)
+    ).catch(() => {});
+
+    setSaveSuccessMsg(`已成功归档成果: ${resultName}`);
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-3 z-50 select-none">
@@ -397,16 +450,29 @@ export const LineStakeoutModal: React.FC<LineStakeoutModalProps> = ({
               </div>
             </div>
           )}
+          {/* Success Banner */}
+          {saveSuccessMsg && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium flex items-center gap-2 animate-fade-in">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{saveSuccessMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 flex justify-between items-center shrink-0">
-          <span className="text-[10px] font-mono text-slate-500">
-            高斯投影: X={currGauss.x.toFixed(2)} Y={currGauss.y.toFixed(2)}
-          </span>
+          <button
+            type="button"
+            onClick={handleSaveStakeout}
+            className="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 active:scale-95 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>保存放样成果</span>
+          </button>
+
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
+            className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
           >
             完成退出
           </button>

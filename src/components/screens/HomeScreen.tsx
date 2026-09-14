@@ -9,6 +9,7 @@ import {
   Square,
   HardDrive,
   Activity,
+  ChevronRight,
 } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 import {
@@ -40,53 +41,66 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onOpenStorag
   } = useSurveyData();
   const { rtkState } = useRTK();
 
-  // 7 Main Menu Items corresponding to 首页.jpg
+  // 航点数只显示 markpoint 数
+  const markpointCount = points.filter(
+    (p) => p.name?.toLowerCase().startsWith('markpoint') || p.code === 'MARK' || p.code === 'WAYPOINT'
+  ).length;
+
+  // 8 Main Menu Items arranged in vertical single-column list rows (纵行排列)
   const menuItems = [
     {
       id: 'mark_waypoint',
       title: '标定航点',
+      desc: '当前高精坐标历元平滑标定入库',
       IconComp: WaypointMarkIcon,
-      badge: `${points.length} 点`,
+      badge: `${markpointCount} 航点`,
     },
     {
       id: 'waypoint_list',
       title: '航点管理',
+      desc: '全要素坐标点库台账、检索与编辑',
       IconComp: WaypointManageIcon,
       badge: `${points.length} 点库`,
     },
     {
       id: 'routes',
       title: '航线与航迹',
+      desc: '外业实时轨迹记录与航线设计规划',
       IconComp: RouteTrackIcon,
       badge: `${routes.length}航线/${tracks.length}航迹`,
     },
     {
       id: 'map',
       title: '卫星地图',
+      desc: '高清卫星遥感底图与离线切片加载',
       IconComp: SatelliteMapIcon,
       badge: 'GIS遥感底图',
     },
     {
       id: 'engineering_survey',
       title: '工程测量',
+      desc: '点采集、点放样、直线放样、测距面积',
       IconComp: EngineeringSurveyIcon,
       badge: '放样/测距/面积',
     },
     {
       id: 'project_manage',
       title: '工程项目',
+      desc: '新建项目、坐标系统与作业参数配置',
       IconComp: ProjectManageIcon,
-      badge: currentProject.coordSystem,
+      badge: `${projects.length} 工程`,
     },
     {
       id: 'common_tools',
       title: '常用工具',
+      desc: '电子罗盘、气压计、数据多格式导入导出',
       IconComp: CommonToolsIcon,
       badge: '坐标/罗盘/数据',
     },
     {
       id: 'exit_app',
       title: '退出程序',
+      desc: '实时保存外业成果并安全退出软件',
       IconComp: ExitAppIcon,
       badge: '安全退出',
     },
@@ -128,6 +142,27 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onOpenStorag
       hasDraggedRef.current = true;
       scrollContainerRef.current.scrollTop = startScrollTopRef.current - deltaY;
     }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    isMouseDownRef.current = true;
+    startYRef.current = e.touches[0].clientY;
+    startScrollTopRef.current = scrollContainerRef.current?.scrollTop || 0;
+    hasDraggedRef.current = false;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isMouseDownRef.current || !scrollContainerRef.current || e.touches.length !== 1) return;
+    const deltaY = e.touches[0].clientY - startYRef.current;
+    if (Math.abs(deltaY) > 5) {
+      hasDraggedRef.current = true;
+      scrollContainerRef.current.scrollTop = startScrollTopRef.current - deltaY;
+    }
+  };
+
+  const handleTouchEnd = () => {
+    isMouseDownRef.current = false;
   };
 
   const handleMouseUpOrLeave = () => {
@@ -185,120 +220,154 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate, onOpenStorag
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUpOrLeave}
         onMouseLeave={handleMouseUpOrLeave}
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-3 space-y-3 cursor-default active:cursor-grab select-none"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        className="flex-1 min-h-0 overflow-y-auto touch-scroll-y overscroll-contain p-3 space-y-3 cursor-default select-none custom-vertical-slider"
       >
-        {/* Realtime Synchronized Ledger Counters (4 White Cards matching 首页.jpg) */}
-        <div className="grid grid-cols-4 gap-2">
+        {/* Realtime Synchronized Ledger Counters (4 White Cards matching 首页.jpg - Flexbox Android 7.0 Compatible) */}
+        <div className="flex flex-wrap -mx-1">
           {/* Card 1: 航点数 */}
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onNavigate('waypoint_list');
-            }}
-            className="bg-white hover:bg-blue-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
-            title="点击查阅航点管理台账"
-          >
-            <div className="flex items-center gap-1 text-[11px] font-bold text-blue-600">
-              <MapPin className="w-3.5 h-3.5 text-blue-600 group-hover:scale-110 transition-transform" />
-              <span>航点数</span>
-            </div>
-            <div className="text-xl sm:text-2xl font-black font-mono text-blue-700 mt-1 leading-none">
-              {points.length}
-            </div>
-            <span className="text-[9px] text-blue-500 font-medium mt-1">点库全要素</span>
-          </button>
+          <div className="w-1/4 px-1" style={{ width: '25%', boxSizing: 'border-box' }}>
+            <button
+              onClick={() => {
+                soundService.playClick();
+                onNavigate('waypoint_list');
+              }}
+              className="w-full bg-white hover:bg-blue-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
+              title="点击查阅航点管理台账"
+            >
+              <div className="flex items-center gap-1 text-[11px] font-bold text-blue-600">
+                <MapPin className="w-3.5 h-3.5 text-blue-600 group-hover:scale-110 transition-transform" />
+                <span>航点数</span>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-blue-700 mt-1 leading-none">
+                {markpointCount}
+              </div>
+              <span className="text-[9px] text-blue-500 font-medium mt-1">标定航点</span>
+            </button>
+          </div>
 
           {/* Card 2: 航迹数 */}
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onNavigate('routes');
-            }}
-            className="bg-white hover:bg-emerald-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
-            title="点击查阅航迹实录列表"
-          >
-            <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-600">
-              <Activity className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
-              <span>航迹数</span>
-            </div>
-            <div className="text-xl sm:text-2xl font-black font-mono text-emerald-700 mt-1 leading-none">
-              {tracks.length}
-            </div>
-            <span className="text-[9px] text-emerald-500 font-medium mt-1">实录轨迹</span>
-          </button>
+          <div className="w-1/4 px-1" style={{ width: '25%', boxSizing: 'border-box' }}>
+            <button
+              onClick={() => {
+                soundService.playClick();
+                onNavigate('routes');
+              }}
+              className="w-full bg-white hover:bg-emerald-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
+              title="点击查阅航迹实录列表"
+            >
+              <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-600">
+                <Activity className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+                <span>航迹数</span>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-emerald-700 mt-1 leading-none">
+                {tracks.length}
+              </div>
+              <span className="text-[9px] text-emerald-500 font-medium mt-1">实录轨迹</span>
+            </button>
+          </div>
 
           {/* Card 3: 规划数 */}
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onNavigate('routes');
-            }}
-            className="bg-white hover:bg-cyan-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
-            title="点击查阅航线设计与规划"
-          >
-            <div className="flex items-center gap-1 text-[11px] font-bold text-cyan-600">
-              <Route className="w-3.5 h-3.5 text-cyan-600 group-hover:scale-110 transition-transform" />
-              <span>规划数</span>
-            </div>
-            <div className="text-xl sm:text-2xl font-black font-mono text-cyan-700 mt-1 leading-none">
-              {routes.length}
-            </div>
-            <span className="text-[9px] text-cyan-500 font-medium mt-1">设计规划</span>
-          </button>
+          <div className="w-1/4 px-1" style={{ width: '25%', boxSizing: 'border-box' }}>
+            <button
+              onClick={() => {
+                soundService.playClick();
+                onNavigate('routes');
+              }}
+              className="w-full bg-white hover:bg-cyan-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
+              title="点击查阅航线设计与规划"
+            >
+              <div className="flex items-center gap-1 text-[11px] font-bold text-cyan-600">
+                <Route className="w-3.5 h-3.5 text-cyan-600 group-hover:scale-110 transition-transform" />
+                <span>规划数</span>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-cyan-700 mt-1 leading-none">
+                {routes.length}
+              </div>
+              <span className="text-[9px] text-cyan-500 font-medium mt-1">设计规划</span>
+            </button>
+          </div>
 
           {/* Card 4: 工程数 */}
-          <button
-            onClick={() => {
-              soundService.playClick();
-              onNavigate('project_manage');
-            }}
-            className="bg-white hover:bg-purple-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
-            title="点击查阅工程项目列表"
-          >
-            <div className="flex items-center gap-1 text-[11px] font-bold text-purple-600">
-              <FolderGit2 className="w-3.5 h-3.5 text-purple-600 group-hover:scale-110 transition-transform" />
-              <span>工程数</span>
-            </div>
-            <div className="text-xl sm:text-2xl font-black font-mono text-purple-700 mt-1 leading-none">
-              {projects.length}
-            </div>
-            <span className="text-[9px] text-purple-500 font-medium mt-1">本地项目</span>
-          </button>
+          <div className="w-1/4 px-1" style={{ width: '25%', boxSizing: 'border-box' }}>
+            <button
+              onClick={() => {
+                soundService.playClick();
+                onNavigate('project_manage');
+              }}
+              className="w-full bg-white hover:bg-purple-50/50 border border-slate-200/90 rounded-2xl p-2 sm:p-2.5 flex flex-col items-center justify-center cursor-pointer transition text-center shadow-xs group active:scale-98"
+              title="点击查阅工程项目列表"
+            >
+              <div className="flex items-center gap-1 text-[11px] font-bold text-purple-600">
+                <FolderGit2 className="w-3.5 h-3.5 text-purple-600 group-hover:scale-110 transition-transform" />
+                <span>工程数</span>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-purple-700 mt-1 leading-none">
+                {projects.length}
+              </div>
+              <span className="text-[9px] text-purple-500 font-medium mt-1">总工项数</span>
+            </button>
+          </div>
         </div>
 
-        {/* Main 3-Column Grid (九宫格) with Divider Lines matching 首页.jpg */}
+        {/* Main 3x3 Grid (九宫格) - 100% Android 7.0 / Chrome 51 Flexbox Compatible */}
         <div className="bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden">
-          <div className="grid grid-cols-3 divide-x divide-y divide-slate-200/80">
-            {menuItems.map((item) => {
+          <div className="nine-grid-container flex flex-wrap w-full">
+            {menuItems.map((item, idx) => {
               const IconComponent = item.IconComp;
+              const isRightEdge = idx % 3 === 2;
+              const isBottomRow = idx >= 6;
               return (
                 <button
                   key={item.id}
                   id={`btn-menu-${item.id}`}
                   onClick={() => handleItemClick(item.id)}
-                  className="group relative p-4 sm:p-5 flex flex-col items-center justify-center text-center hover:bg-slate-50/80 active:bg-slate-100 transition-all duration-150 cursor-pointer min-h-[110px] sm:min-h-[125px]"
+                  className={`nine-grid-cell group relative p-3 sm:p-4 flex flex-col items-center justify-center text-center hover:bg-slate-50/80 active:bg-blue-50/50 transition duration-150 cursor-pointer min-h-[110px] sm:min-h-[125px] ${
+                    !isRightEdge ? 'border-r border-slate-200/80' : ''
+                  } ${!isBottomRow ? 'border-b border-slate-200/80' : ''}`}
+                  style={{
+                    width: '33.333333%',
+                    flex: '0 0 33.333333%',
+                    maxWidth: '33.333333%',
+                    boxSizing: 'border-box',
+                  }}
                 >
                   {/* Illustrated 3D Icon */}
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center mb-2 group-hover:scale-106 transition-transform duration-200 ease-out">
-                    <IconComponent className="w-full h-full object-contain filter drop-shadow-sm" />
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform duration-200 ease-out">
+                    <IconComponent className="w-full h-full object-contain filter drop-shadow-xs" />
                   </div>
 
                   {/* Title */}
-                  <span className="text-sm sm:text-base font-bold text-slate-900 tracking-tight leading-snug">
+                  <span className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight leading-snug">
                     {item.title}
                   </span>
 
-                  {/* Subtle description tag */}
-                  <span className="text-[10px] text-slate-400 font-medium mt-0.5 line-clamp-1">
+                  {/* Description / Badge */}
+                  <span className="text-[9.5px] text-slate-400 font-medium mt-0.5 line-clamp-1 max-w-[90%]">
                     {item.badge}
                   </span>
                 </button>
               );
             })}
 
-            {/* Empty placeholders to fill the 3x3 table grid */}
-            <div className="p-4 sm:p-5 flex flex-col items-center justify-center text-center bg-slate-50/20" />
-            <div className="p-4 sm:p-5 flex flex-col items-center justify-center text-center bg-slate-50/20" />
+            {/* 9th Cell (Placeholder to complete standard 3x3 九宫格) */}
+            <div
+              className="nine-grid-cell p-3 sm:p-4 flex flex-col items-center justify-center text-center bg-slate-50/40"
+              style={{
+                width: '33.333333%',
+                flex: '0 0 33.333333%',
+                maxWidth: '33.333333%',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div className="w-9 h-9 rounded-xl border border-dashed border-slate-300 flex items-center justify-center text-slate-400 mb-1.5">
+                <span className="text-sm font-mono font-bold">+</span>
+              </div>
+              <span className="text-xs font-medium text-slate-400">快捷扩展</span>
+              <span className="text-[9.5px] text-slate-400 font-mono mt-0.5">自定义</span>
+            </div>
           </div>
         </div>
 

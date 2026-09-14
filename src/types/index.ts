@@ -14,7 +14,7 @@ export type ScreenType =
 
 export type AngleFormatType = 'dms' | 'dd' | 'dm';
 
-export type RTKSolutionType = 'FIXED' | 'FLOAT' | 'SINGLE' | 'INVALID';
+export type RTKSolutionType = 'FIXED' | 'FLOAT' | 'SINGLE' | 'INVALID' | 'DGPS';
 
 export interface SevenParameters {
   dx: number; // 平移 X (m)

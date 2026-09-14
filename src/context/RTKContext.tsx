@@ -4,6 +4,7 @@ import { soundService } from '../utils/sound';
 import { nativePermissionService } from '../utils/nativePermissionService';
 import { calculateGpsCourse, haversineDistance } from '../utils/geodesy';
 import { generateNmeaPacket } from '../utils/nmeaGenerator';
+import { parseNmeaSentence } from '../utils/nmeaParser';
 
 export interface BluetoothDeviceInfo {
   id: string;
@@ -63,10 +64,13 @@ interface RTKContextType {
   disconnectNtrip: () => void;
   hasBarometerSensor: boolean;
   setHasBarometerSensor: (has: boolean) => void;
+  barometerSource: 'hardware' | 'configured' | 'none';
+  detectHardwareBarometer: () => Promise<boolean>;
   nmeaStream: NmeaStreamState;
   clearNmeaStream: () => void;
   toggleNmeaPause: () => void;
   setSimulateFakeConnection: (simulate: boolean) => void;
+  processIncomingNmea: (sentence: string) => void;
   gpsSamplingStats: GpsMovementSamplingStats;
   stepSimulateMovement: (distanceM?: number, directionDeg?: number) => void;
 }
@@ -157,10 +161,71 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     rtkStateRef.current = rtkState;
   }, [rtkState]);
 
+  const [barometerSource, setBarometerSource] = useState<'hardware' | 'configured' | 'none'>(() => {
+    return hasBarometerSensor ? 'configured' : 'none';
+  });
+
   const setHasBarometerSensor = useCallback((has: boolean) => {
     localStorage.setItem('rtk_has_barometer', String(has));
     setHasBarometerSensorState(has);
+    setBarometerSource(has ? 'configured' : 'none');
     setRtkState((prev) => ({ ...prev, hasBarometerSensor: has }));
+  }, []);
+
+  const detectHardwareBarometer = useCallback(async (): Promise<boolean> => {
+    // 1. AndroidBridge hardware sensor query
+    try {
+      if ((window as any).AndroidBridge?.getNativePressure) {
+        const p = (window as any).AndroidBridge.getNativePressure();
+        const num = typeof p === 'string' ? parseFloat(p) : Number(p);
+        if (!isNaN(num) && num > 300 && num < 1200) {
+          setHasBarometerSensorState(true);
+          setBarometerSource('hardware');
+          setRtkState((prev) => ({ ...prev, hasBarometerSensor: true, pressure: Math.round(num * 10) / 10 }));
+          return true;
+        }
+      }
+      if ((window as any).AndroidBridge?.getPressure) {
+        const p = (window as any).AndroidBridge.getPressure();
+        const num = typeof p === 'string' ? parseFloat(p) : Number(p);
+        if (!isNaN(num) && num > 300 && num < 1200) {
+          setHasBarometerSensorState(true);
+          setBarometerSource('hardware');
+          setRtkState((prev) => ({ ...prev, hasBarometerSensor: true, pressure: Math.round(num * 10) / 10 }));
+          return true;
+        }
+      }
+      if ((window as any).AndroidBridge?.hasPressureSensor && (window as any).AndroidBridge.hasPressureSensor()) {
+        setHasBarometerSensorState(true);
+        setBarometerSource('hardware');
+        setRtkState((prev) => ({ ...prev, hasBarometerSensor: true }));
+        return true;
+      }
+    } catch (e) {
+      console.warn('AndroidBridge pressure check:', e);
+    }
+
+    // 2. Web Sensor API (PressureSensor)
+    if (typeof (window as any).PressureSensor !== 'undefined') {
+      try {
+        const sensor = new (window as any).PressureSensor({ frequency: 2 });
+        return new Promise((resolve) => {
+          sensor.addEventListener('reading', () => {
+            if (sensor.pressure) {
+              setHasBarometerSensorState(true);
+              setBarometerSource('hardware');
+              setRtkState((prev) => ({ ...prev, hasBarometerSensor: true, pressure: Math.round(sensor.pressure * 10) / 10 }));
+              resolve(true);
+            }
+          }, { once: true });
+          sensor.addEventListener('error', () => resolve(false), { once: true });
+          sensor.start();
+          setTimeout(() => resolve(false), 800);
+        });
+      } catch {}
+    }
+
+    return false;
   }, []);
 
   const [hasMagnetometer, setHasMagnetometer] = useState<boolean>(false);
@@ -210,10 +275,32 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const lastNmeaReceivedTimeRef = useRef<number>(Date.now());
   const isNmeaPausedRef = useRef<boolean>(false);
   const simulateFakeConnectionRef = useRef<boolean>(false);
+  const lastExternalNmeaTimeRef = useRef<number>(0);
+  const isReceivingExternalNmeaRef = useRef<boolean>(false);
 
   // NMEA 0183 live stream generator & fake connection detection
   useEffect(() => {
     const interval = setInterval(() => {
+      // 1. In bluetooth_gnss mode or when receiving real external Bluetooth NMEA:
+      // NEVER generate simulated internal NMEA! Only pass true external hardware telemetry.
+      if (rtkStateRef.current.mode === 'bluetooth_gnss') {
+        const timeSinceLast = Date.now() - lastExternalNmeaTimeRef.current;
+        if (timeSinceLast > 3500) {
+          // If no external data received for > 3.5s, drop Hz to indicate waiting
+          setNmeaStream((prev) => ({
+            ...prev,
+            hz: 0,
+            bytesPerSec: 0,
+          }));
+        }
+        return;
+      }
+
+      // 2. Only generate simulated packets if explicitly in simulated mode
+      if (rtkStateRef.current.mode !== 'simulated') {
+        return;
+      }
+
       const isSimulatingFake = simulateFakeConnectionRef.current;
       if (isSimulatingFake) {
         setNmeaStream((prev) => ({
@@ -372,6 +459,180 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [hasMagnetometer, isUsingGpsHeading]);
 
+  // Real NMEA-0183 processing engine for external Bluetooth GNSS / GPS Connector apps
+  const processIncomingNmea = useCallback((rawSentence: string) => {
+    if (!rawSentence) return;
+    const sentence = rawSentence.trim();
+    if (!sentence.startsWith('$')) return;
+
+    const now = Date.now();
+    lastExternalNmeaTimeRef.current = now;
+    isReceivingExternalNmeaRef.current = true;
+
+    // Update NMEA stream log and metrics
+    const byteLen = sentence.length + 2;
+    setNmeaStream((prev) => {
+      const updated = [...prev.messages, sentence];
+      if (updated.length > 80) {
+        updated.splice(0, updated.length - 80);
+      }
+      return {
+        ...prev,
+        messages: updated,
+        hz: 5.0,
+        bytesPerSec: Math.max(160, prev.bytesPerSec + byteLen),
+        totalReceived: prev.totalReceived + 1,
+        isFakeConnection: false,
+      };
+    });
+
+    const parsed = parseNmeaSentence(sentence);
+    if (!parsed) return;
+
+    setRtkState((prev) => {
+      const next = { ...prev };
+      let updatedCoord = false;
+
+      if (parsed.latitude !== undefined && parsed.longitude !== undefined) {
+        next.currentLat = parsed.latitude;
+        next.currentLon = parsed.longitude;
+        updatedCoord = true;
+      }
+      if (parsed.altitude !== undefined) {
+        next.currentAlt = Math.round(parsed.altitude * 100) / 100;
+      }
+      if (parsed.solution !== undefined) {
+        next.solution = parsed.solution;
+      }
+      if (parsed.satsUsed !== undefined && parsed.satsUsed > 0) {
+        next.satsUsed = parsed.satsUsed;
+      }
+      if (parsed.hdop !== undefined && parsed.hdop > 0) {
+        next.hdop = parsed.hdop;
+      }
+      if (parsed.pdop !== undefined && parsed.pdop > 0) {
+        next.pdop = parsed.pdop;
+      }
+      if (parsed.hrms !== undefined && parsed.hrms > 0) {
+        next.hrms = parsed.hrms;
+      }
+      if (parsed.vrms !== undefined && parsed.vrms > 0) {
+        next.vrms = parsed.vrms;
+      }
+      if (parsed.speed !== undefined) {
+        next.speed = parsed.speed;
+      }
+      if (parsed.heading !== undefined) {
+        next.heading = parsed.heading;
+      }
+      if (parsed.ageOfDiff !== undefined) {
+        next.ageOfDiff = parsed.ageOfDiff;
+      }
+
+      next.realGpsStatus = 'locked';
+      next.realGpsMessage = `已连接外置蓝牙GNSS接收机 (解状态: ${next.solution}, 卫星: ${next.satsUsed}, HRMS: ±${next.hrms.toFixed(3)}m)`;
+
+      if (updatedCoord) {
+        updateGpsCourse(next.currentLat, next.currentLon, next.speed || 0);
+      }
+
+      return next;
+    });
+  }, [updateGpsCourse]);
+
+  // Register global window listeners and AndroidBridge polling for external Bluetooth GNSS NMEA
+  useEffect(() => {
+    (window as any).onBluetoothNmeaSentence = (sentence: string) => {
+      processIncomingNmea(sentence);
+    };
+
+    (window as any).onBluetoothNmeaData = (rawText: string) => {
+      if (!rawText) return;
+      const lines = String(rawText).split(/\r?\n/);
+      for (const line of lines) {
+        if (line.trim().startsWith('$')) {
+          processIncomingNmea(line.trim());
+        }
+      }
+    };
+
+    (window as any).receiveNmeaSentence = (sentence: string) => {
+      processIncomingNmea(sentence);
+    };
+
+    const handleCustomNmea = (e: any) => {
+      const sentence = e.detail?.sentence || e.data;
+      if (typeof sentence === 'string') {
+        processIncomingNmea(sentence);
+      }
+    };
+
+    window.addEventListener('bluetoothNmea', handleCustomNmea);
+
+    // Polling AndroidBridge for Bluetooth NMEA buffer (Android SPP or GPS connector bridge)
+    const androidBridgeInterval = setInterval(() => {
+      try {
+        if ((window as any).AndroidBridge?.getLatestBluetoothNMEA) {
+          const raw = (window as any).AndroidBridge.getLatestBluetoothNMEA();
+          if (raw) {
+            const lines = String(raw).split(/\r?\n/);
+            for (const line of lines) {
+              if (line.trim().startsWith('$')) {
+                processIncomingNmea(line.trim());
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('AndroidBridge Bluetooth NMEA polling:', e);
+      }
+    }, 150);
+
+    return () => {
+      delete (window as any).onBluetoothNmeaSentence;
+      delete (window as any).onBluetoothNmeaData;
+      delete (window as any).receiveNmeaSentence;
+      window.removeEventListener('bluetoothNmea', handleCustomNmea);
+      clearInterval(androidBridgeInterval);
+    };
+  }, [processIncomingNmea]);
+
+  // Continuous Barometer Hardware Polling / Listener
+  useEffect(() => {
+    // Immediate detection probe on mount
+    detectHardwareBarometer().catch(() => {});
+
+    // Callback for Android native pressure event push
+    (window as any).onNativePressureReceived = (pressure: any) => {
+      const num = typeof pressure === 'string' ? parseFloat(pressure) : Number(pressure);
+      if (!isNaN(num) && num > 300 && num < 1200) {
+        setHasBarometerSensorState(true);
+        setBarometerSource('hardware');
+        setRtkState((prev) => ({ ...prev, hasBarometerSensor: true, pressure: Math.round(num * 10) / 10 }));
+      }
+    };
+
+    // Polling interval if AndroidBridge exists
+    const baroInterval = setInterval(() => {
+      try {
+        if ((window as any).AndroidBridge?.getNativePressure) {
+          const p = (window as any).AndroidBridge.getNativePressure();
+          const num = typeof p === 'string' ? parseFloat(p) : Number(p);
+          if (!isNaN(num) && num > 300 && num < 1200) {
+            setHasBarometerSensorState(true);
+            setBarometerSource('hardware');
+            setRtkState((prev) => ({ ...prev, hasBarometerSensor: true, pressure: Math.round(num * 10) / 10 }));
+          }
+        }
+      } catch {}
+    }, 1000);
+
+    return () => {
+      delete (window as any).onNativePressureReceived;
+      clearInterval(baroInterval);
+    };
+  }, [detectHardwareBarometer]);
+
   // Step simulation for testing GPS movement sampling indoors
   const stepSimulateMovement = useCallback((distanceM = 1.2, directionDeg?: number) => {
     const bearing = directionDeg !== undefined ? directionDeg : (gpsCourseHeading + 12) % 360;
@@ -435,6 +696,45 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       realGpsStatus: 'locating',
       realGpsMessage: '正在请求设备定位权限与GNSS卫星定位...',
     }));
+
+    if ((window as any).AndroidBridge?.getNativeGPSLocation) {
+      try {
+        const raw = (window as any).AndroidBridge.getNativeGPSLocation();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.hasFix) {
+            isFetchingGpsRef.current = false;
+            const lat = parsed.latitude;
+            const lon = parsed.longitude;
+            const alt = parsed.altitude || 23.5;
+            const acc = parsed.accuracy || 2.5;
+            const speed = parsed.speed || 0;
+
+            updateGpsCourse(lat, lon, speed);
+
+            setRtkState((prev) => ({
+              ...prev,
+              currentLat: lat,
+              currentLon: lon,
+              currentAlt: Math.round(alt * 100) / 100,
+              speed: Math.round(speed * 10) / 10,
+              hrms: Math.max(0.005, acc / (prev.solution === 'FIXED' ? 100 : 1)),
+              vrms: Math.max(0.010, (acc * 1.5) / (prev.solution === 'FIXED' ? 100 : 1)),
+              realGpsStatus: 'locked',
+              realGpsAccuracy: acc,
+              realGpsFrequencyHz: prev.targetSamplingHz || 4.0,
+              realGpsMessage: `已通过原生芯片通道锁定真实GNSS定位 (精度 ±${acc.toFixed(1)}m)`,
+              mode: switchMode ? 'real_gps' : prev.mode,
+            }));
+
+            soundService.playSuccess();
+            return true;
+          }
+        }
+      } catch (err) {
+        console.warn('AndroidBridge native GPS fetch error:', err);
+      }
+    }
 
     if (nativePermissionService.isNativePlatform()) {
       try {
@@ -564,10 +864,10 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, [updateGpsCourse]);
 
-  // Continuous High-Frequency Real Geolocation Engine (watchPosition stream)
+  // Continuous High-Frequency Real Geolocation Engine (Native AndroidBridge hardware GPS or watchPosition stream)
   useEffect(() => {
     if (rtkState.mode !== 'real_gps') return;
-    if (typeof window === 'undefined' || !navigator.geolocation) return;
+    if (typeof window === 'undefined') return;
 
     setRtkState((prev) => ({
       ...prev,
@@ -577,7 +877,7 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const epochTimestamps: number[] = [];
     const targetHz = rtkState.targetSamplingHz || 4;
 
-    const handleGnssEpoch = (pos: GeolocationPosition) => {
+    const handleGnssEpoch = (pos: any) => {
       try {
         const now = performance.now();
         epochTimestamps.push(now);
@@ -596,9 +896,9 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
-        const alt = pos.coords.altitude !== null && !isNaN(pos.coords.altitude) ? pos.coords.altitude : undefined;
-        const acc = pos.coords.accuracy || 3.0;
-        const speed = pos.coords.speed !== null && !isNaN(pos.coords.speed) ? pos.coords.speed : 0;
+        const alt = pos.coords.altitude !== null && pos.coords.altitude !== undefined && !isNaN(pos.coords.altitude) ? pos.coords.altitude : undefined;
+        const acc = pos.coords.accuracy || 2.5;
+        const speed = pos.coords.speed !== null && pos.coords.speed !== undefined && !isNaN(pos.coords.speed) ? pos.coords.speed : 0;
 
         updateGpsCourse(lat, lon, speed);
 
@@ -620,28 +920,62 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    let watchId: number | null = null;
-    try {
-      watchId = navigator.geolocation.watchPosition(
-        handleGnssEpoch,
-        (err) => {
-          console.warn('Geolocation watch error:', err);
-        },
-        { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
-      );
-    } catch (e) {
-      console.error('Failed to initiate watchPosition:', e);
+    // If running inside Android with direct hardware GPS bridge (Chrome/WebView Java Interface)
+    if ((window as any).AndroidBridge?.getNativeGPSLocation) {
+      const intervalId = setInterval(() => {
+        try {
+          const raw = (window as any).AndroidBridge.getNativeGPSLocation();
+          if (!raw) return;
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.hasFix) {
+            handleGnssEpoch({
+              coords: {
+                latitude: parsed.latitude,
+                longitude: parsed.longitude,
+                altitude: parsed.altitude,
+                accuracy: parsed.accuracy || 2.5,
+                speed: parsed.speed || 0,
+              },
+            });
+          } else {
+            setRtkState((prev) => ({
+              ...prev,
+              realGpsStatus: 'locating',
+              realGpsMessage: '原生硬件GPS芯片正在搜星捕获，请确保处于室外开阔环境...',
+            }));
+          }
+        } catch (err) {
+          console.error('Error polling AndroidBridge native GPS:', err);
+        }
+      }, 1000 / targetHz);
+
+      return () => clearInterval(intervalId);
     }
 
-    return () => {
-      if (watchId !== null) {
-        try {
-          navigator.geolocation.clearWatch(watchId);
-        } catch {
-          // ignore clear errors
-        }
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      let watchId: number | null = null;
+      try {
+        watchId = navigator.geolocation.watchPosition(
+          handleGnssEpoch,
+          (err) => {
+            console.warn('Geolocation watch error:', err);
+          },
+          { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+        );
+      } catch (e) {
+        console.error('Failed to initiate watchPosition:', e);
       }
-    };
+
+      return () => {
+        if (watchId !== null) {
+          try {
+            navigator.geolocation.clearWatch(watchId);
+          } catch {
+            // ignore clear errors
+          }
+        }
+      };
+    }
   }, [rtkState.mode, rtkState.targetSamplingHz, updateGpsCourse]);
 
   // Subtle real-time GNSS jitter & satellite drift simulation ONLY when in simulated mode
@@ -952,10 +1286,13 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         disconnectNtrip,
         hasBarometerSensor,
         setHasBarometerSensor,
+        barometerSource,
+        detectHardwareBarometer,
         nmeaStream,
         clearNmeaStream,
         toggleNmeaPause,
         setSimulateFakeConnection,
+        processIncomingNmea,
         gpsSamplingStats,
         stepSimulateMovement,
       }}

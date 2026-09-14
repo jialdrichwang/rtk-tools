@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRTK } from '../../context/RTKContext';
+import { RTKSolutionType } from '../../types';
 import {
   Radio,
   Satellite,
@@ -86,6 +87,8 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
         return { label: '固定解', color: 'bg-emerald-100 text-emerald-800', border: 'border-emerald-400' };
       case 'FLOAT':
         return { label: '浮点解', color: 'bg-amber-100 text-amber-800', border: 'border-amber-400' };
+      case 'DGPS':
+        return { label: '差分解', color: 'bg-cyan-100 text-cyan-800', border: 'border-cyan-400' };
       case 'SINGLE':
         return { label: '单点解', color: 'bg-blue-100 text-blue-800', border: 'border-blue-400' };
       default:
@@ -97,7 +100,7 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
 
   // Cycle solution on badge click for quick testing
   const handleCycleSolution = () => {
-    const solutions: Array<'FIXED' | 'FLOAT' | 'SINGLE' | 'INVALID'> = ['FIXED', 'FLOAT', 'SINGLE', 'INVALID'];
+    const solutions: RTKSolutionType[] = ['FIXED', 'FLOAT', 'DGPS', 'SINGLE', 'INVALID'];
     const nextIdx = (solutions.indexOf(rtkState.solution) + 1) % solutions.length;
     setSolution(solutions[nextIdx]);
   };

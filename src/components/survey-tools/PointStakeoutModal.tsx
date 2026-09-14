@@ -4,6 +4,11 @@ import { useRTK } from '../../context/RTKContext';
 import { SurveyPoint } from '../../types';
 import { latLonToGauss, calculateStakeoutGuidance } from '../../utils/geodesy';
 import {
+  fileStorageService,
+  generateSurveySequentialName,
+  ENGINEERING_SURVEY_SUBPATHS,
+} from '../../utils/fileStorageService';
+import {
   Target,
   Navigation,
   ArrowUp,
@@ -15,6 +20,8 @@ import {
   Compass,
   Crosshair,
   Layers,
+  Save,
+  Check,
 } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 
@@ -27,8 +34,9 @@ export const PointStakeoutModal: React.FC<PointStakeoutModalProps> = ({
   onClose,
   initialPoint,
 }) => {
-  const { points, currentProject } = useSurveyData();
+  const { points, currentProject, addPoint } = useSurveyData();
   const { rtkState, nudgePosition } = useRTK();
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   const [selectedPointId, setSelectedPointId] = useState<string>(
     initialPoint?.id || (points[0]?.id || '')
@@ -100,6 +108,72 @@ export const PointStakeoutModal: React.FC<PointStakeoutModalProps> = ({
       dy,
     };
   }, [targetPoint, guidance, receiverGauss]);
+
+  const handleSaveStakeout = () => {
+    soundService.playSuccess();
+    const resultName = generateSurveySequentialName('Point', points.map((p) => p.name));
+
+    const stakeRecord = {
+      resultName,
+      stakeoutType: 'POINT_LAYOUT',
+      targetPoint: targetPoint ? {
+        id: targetPoint.id,
+        name: targetPoint.name,
+        x: targetPoint.x,
+        y: targetPoint.y,
+        elevation: targetPoint.elevation,
+      } : null,
+      actualMeasurement: {
+        x: receiverGauss.x,
+        y: receiverGauss.y,
+        elevation: rtkState.currentAlt,
+        lat: rtkState.currentLat,
+        lon: rtkState.currentLon,
+        hrms: rtkState.hrms,
+        vrms: rtkState.vrms,
+        solution: rtkState.solution,
+      },
+      deviation: guidance ? {
+        distanceToTarget: guidance.distanceToTarget,
+        forward: guidance.forward,
+        right: guidance.right,
+        deltaH: guidance.deltaH,
+      } : null,
+      timestamp: new Date().toISOString(),
+      projectName: currentProject.name,
+    };
+
+    // Save to: project/工程项目文件名/Engineering Surveying/Point layout results/PointYYYYMMDD_0001.json
+    fileStorageService.saveProjectFile(
+      currentProject.name,
+      ENGINEERING_SURVEY_SUBPATHS.POINT_LAYOUT_RESULTS,
+      `${resultName}.json`,
+      JSON.stringify(stakeRecord, null, 2)
+    ).catch(() => {});
+
+    // Also record as a surveyed point
+    addPoint({
+      name: resultName,
+      code: 'STAKEOUT',
+      lat: rtkState.currentLat,
+      lon: rtkState.currentLon,
+      elevation: rtkState.currentAlt,
+      x: receiverGauss.x,
+      y: receiverGauss.y,
+      coordSystem: currentProject.coordSystem,
+      desc: `点放样成果 [对齐目标: ${targetPoint?.name || '未知'}] 偏差:${guidance?.distanceToTarget.toFixed(3)}m`,
+      color: '#dc2626',
+      hrms: rtkState.hrms,
+      vrms: rtkState.vrms,
+      solutionType: rtkState.solution,
+      satCount: rtkState.satsUsed,
+      antennaHeight: rtkState.antennaHeight,
+      projectId: currentProject.id,
+    });
+
+    setSaveSuccessMsg(`已成功归档成果: ${resultName}`);
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-3 z-50 select-none">
@@ -312,16 +386,29 @@ export const PointStakeoutModal: React.FC<PointStakeoutModalProps> = ({
               </button>
             </div>
           </div>
+          {/* Success Banner */}
+          {saveSuccessMsg && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium flex items-center gap-2 animate-fade-in">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{saveSuccessMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 flex justify-between items-center shrink-0">
-          <span className="text-[10px] font-mono text-slate-500">
-            高斯: X={receiverGauss.x.toFixed(2)} Y={receiverGauss.y.toFixed(2)}
-          </span>
+          <button
+            type="button"
+            onClick={handleSaveStakeout}
+            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>保存放样成果</span>
+          </button>
+
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
+            className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
           >
             完成放样退出
           </button>

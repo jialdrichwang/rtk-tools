@@ -2,7 +2,13 @@ import React, { useState, useMemo } from 'react';
 import { useSurveyData } from '../../context/SurveyDataContext';
 import { useRTK } from '../../context/RTKContext';
 import { calculateDistanceAndAzimuth, latLonToGauss } from '../../utils/geodesy';
-import { TrendingDown, X, Compass, ArrowUp, ArrowDown } from 'lucide-react';
+import {
+  fileStorageService,
+  generateSurveySequentialName,
+  ENGINEERING_SURVEY_SUBPATHS,
+} from '../../utils/fileStorageService';
+import { TrendingDown, X, Compass, ArrowUp, ArrowDown, Save, Check } from 'lucide-react';
+import { soundService } from '../../utils/sound';
 
 interface SlopeMeasureModalProps {
   onClose: () => void;
@@ -11,6 +17,7 @@ interface SlopeMeasureModalProps {
 export const SlopeMeasureModal: React.FC<SlopeMeasureModalProps> = ({ onClose }) => {
   const { points, currentProject } = useSurveyData();
   const { rtkState } = useRTK();
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   const [topPointId, setTopPointId] = useState<string>(points[0]?.id || '');
   const [bottomPointId, setBottomPointId] = useState<string>(points[1]?.id || points[0]?.id || '');
@@ -79,6 +86,39 @@ export const SlopeMeasureModal: React.FC<SlopeMeasureModalProps> = ({ onClose })
       scaleY,
     };
   }, [calc]);
+
+  const handleSaveSlopeMeasurement = () => {
+    soundService.playSuccess();
+    const resultName = generateSurveySequentialName('slope measurement', points.map((p) => p.name));
+
+    const record = {
+      resultName,
+      surveyType: 'SLOPE_MEASUREMENT',
+      topPoint: p1 ? { name: p1.name, x: p1.x, y: p1.y, elevation: p1.elevation } : null,
+      bottomPoint: p2 ? { name: p2.name, x: p2.x, y: p2.y, elevation: p2.elevation } : null,
+      calculation: calc,
+      currentRTK: {
+        x: currGauss.x,
+        y: currGauss.y,
+        elevation: rtkState.currentAlt,
+        lat: rtkState.currentLat,
+        lon: rtkState.currentLon,
+        solution: rtkState.solution,
+      },
+      timestamp: new Date().toISOString(),
+      projectName: currentProject.name,
+    };
+
+    fileStorageService.saveProjectFile(
+      currentProject.name,
+      ENGINEERING_SURVEY_SUBPATHS.SLOPE_MEASUREMENT,
+      `${resultName}.json`,
+      JSON.stringify(record, null, 2)
+    ).catch(() => {});
+
+    setSaveSuccessMsg(`已成功归档至: slope measurement/${resultName}`);
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-3 z-50 select-none">
@@ -271,16 +311,30 @@ export const SlopeMeasureModal: React.FC<SlopeMeasureModalProps> = ({ onClose })
               </div>
             </div>
           )}
+
+          {/* Success Banner */}
+          {saveSuccessMsg && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium flex items-center gap-2 animate-fade-in">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{saveSuccessMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 flex justify-between items-center shrink-0">
-          <span className="text-[10px] font-mono text-slate-500">
-            高斯: X={currGauss.x.toFixed(2)} Y={currGauss.y.toFixed(2)}
-          </span>
+          <button
+            type="button"
+            onClick={handleSaveSlopeMeasurement}
+            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>保存坡度测量成果</span>
+          </button>
+
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
+            className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
           >
             完成退出
           </button>

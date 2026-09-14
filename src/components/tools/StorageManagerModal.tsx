@@ -16,6 +16,7 @@ import {
   MapPin,
   Layers,
   Trash2,
+  Compass,
 } from 'lucide-react';
 import {
   fileStorageService,
@@ -25,6 +26,7 @@ import {
 } from '../../utils/fileStorageService';
 import { useSurveyData } from '../../context/SurveyDataContext';
 import { soundService } from '../../utils/sound';
+import { spatialMagneticService } from '../../utils/spatialMagneticService';
 import {
   exportPointsToCSV,
   exportPointsToCASS,
@@ -111,8 +113,18 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({ isOpen
       // 3. Save project
       await fileStorageService.saveFile('project', `${currentProject.name}_工程配置.json`, JSON.stringify(currentProject, null, 2));
 
+      // 4. Save magnetic calibration files if present
+      const baseline = spatialMagneticService.getBaselineData();
+      if (baseline) {
+        await spatialMagneticService.saveBaselineData(baseline);
+      }
+      const field = spatialMagneticService.getFieldData();
+      if (field) {
+        await spatialMagneticService.saveFieldData(field);
+      }
+
       soundService.playSuccess();
-      setStatusMessage({ text: `位点及航迹已完整保存至 point/ 与 track/ 目录！`, type: 'success' });
+      setStatusMessage({ text: `位点、航迹、工程及磁力校准数据已完整同步！`, type: 'success' });
       loadData();
     } catch (e: any) {
       setStatusMessage({ text: `同步备份出现异常: ${e.message}`, type: 'warn' });
@@ -143,6 +155,8 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({ isOpen
       case 'track':
       case 'tracks': return <FileSpreadsheet className="w-4 h-4 text-cyan-600" />;
       case 'project': return <FileText className="w-4 h-4 text-purple-600" />;
+      case 'magnetomater calibration data':
+      case 'magnetometer calibration data': return <Compass className="w-4 h-4 text-amber-600" />;
       default: return <Layers className="w-4 h-4 text-emerald-600" />;
     }
   };
@@ -243,23 +257,28 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({ isOpen
             </div>
           )}
 
-          {/* 4 Fixed Subdirectory Tabs */}
-          <div className="grid grid-cols-4 gap-1.5">
+          {/* 5 Fixed Subdirectory Tabs */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-1.5">
             {folderStats.map((item) => {
               const isSelected = selectedFolder === item.name;
+              // Clean display title for longer names
+              const displayLabel = item.name === 'magnetomater calibration data' 
+                ? 'calibration' 
+                : item.name;
               return (
                 <button
                   key={item.name}
                   onClick={() => handleFolderClick(item.name)}
+                  title={`/${item.name}`}
                   className={`p-2 rounded-xl border text-left transition flex flex-col items-center justify-center gap-1 cursor-pointer ${
                     isSelected
                       ? 'bg-blue-50 border-blue-400 text-blue-900 ring-1 ring-blue-400/40 shadow-xs'
                       : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
                   }`}
                 >
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 max-w-full truncate">
                     {getFolderIcon(item.name)}
-                    <span className="text-xs font-bold font-mono">/{item.name}</span>
+                    <span className="text-[11px] font-bold font-mono truncate">/{displayLabel}</span>
                   </div>
                   <span className="text-[10px] text-slate-500 font-semibold">
                     {item.count} 个文件

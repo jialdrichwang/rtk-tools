@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useSurveyData } from '../../context/SurveyDataContext';
 import { useRTK } from '../../context/RTKContext';
 import { latLonToGauss } from '../../utils/geodesy';
+import {
+  fileStorageService,
+  generateSurveySequentialName,
+  ENGINEERING_SURVEY_SUBPATHS,
+} from '../../utils/fileStorageService';
 import { MapPin, CheckCircle2, RotateCw, X, Radio } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 
@@ -13,7 +18,13 @@ export const PointCollectionModal: React.FC<PointCollectionModalProps> = ({ onCl
   const { currentProject, points, addPoint } = useSurveyData();
   const { rtkState } = useRTK();
 
-  const [pointName, setPointName] = useState(`CP_${points.length + 1}`);
+  // Naming format: pointcollectionYYYYMMDD_0001
+  const defaultPointName = generateSurveySequentialName(
+    'pointcollection',
+    points.map((p) => p.name)
+  );
+
+  const [pointName, setPointName] = useState(defaultPointName);
   const [pointCode, setPointCode] = useState('CONTROL_PT');
   const [antennaHeight, setAntennaHeight] = useState(rtkState.antennaHeight.toString());
   const [targetEpochs, setTargetEpochs] = useState(5); // 5 epochs averaging
@@ -52,7 +63,7 @@ export const PointCollectionModal: React.FC<PointCollectionModalProps> = ({ onCl
         currentProject.coordSystem
       );
 
-      addPoint({
+      const savedPoint = addPoint({
         name: pointName,
         code: pointCode,
         lat: finalLat,
@@ -61,7 +72,7 @@ export const PointCollectionModal: React.FC<PointCollectionModalProps> = ({ onCl
         x: gauss.x,
         y: gauss.y,
         coordSystem: currentProject.coordSystem,
-        desc: `${targetEpochs}历元平滑高精控制点`,
+        desc: `${targetEpochs}历元平滑高精控制点采集`,
         color: '#f97316',
         hrms: rtkState.hrms * 0.7,
         vrms: rtkState.vrms * 0.7,
@@ -70,6 +81,14 @@ export const PointCollectionModal: React.FC<PointCollectionModalProps> = ({ onCl
         antennaHeight: parseFloat(antennaHeight || '0'),
         projectId: currentProject.id,
       });
+
+      // Save to: project/工程项目文件名/Engineering Surveying/project point collection/pointcollectionYYYYMMDD_0001
+      fileStorageService.saveProjectFile(
+        currentProject.name,
+        ENGINEERING_SURVEY_SUBPATHS.POINT_COLLECTION,
+        `${pointName}.json`,
+        JSON.stringify(savedPoint, null, 2)
+      ).catch(() => {});
     }
 
     return () => clearTimeout(timer);

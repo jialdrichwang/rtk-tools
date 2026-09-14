@@ -8,6 +8,7 @@ import {
   latLonToGauss,
   formatAngle,
 } from '../../utils/geodesy';
+import { generateSurveySequentialName } from '../../utils/fileStorageService';
 import {
   Save,
   Crosshair,
@@ -33,10 +34,13 @@ export const MarkWaypointScreen: React.FC<MarkWaypointScreenProps> = ({
   const { currentProject, points, addPoint, unitSettings } = useSurveyData();
   const { rtkState } = useRTK();
 
-  // Next default point name e.g. "point 5"
-  const defaultName = `point ${points.length + 1}`;
+  // Naming rule: markpointYYYYMMDD_0001
+  const defaultName = generateSurveySequentialName(
+    'markpoint',
+    points.map((p) => p.name)
+  );
   const [pointName, setPointName] = useState(defaultName);
-  const [pointCode, setPointCode] = useState('CP');
+  const [pointCode, setPointCode] = useState('MARK');
   const [pointColor, setPointColor] = useState('#2563eb');
   const [angleFormat, setAngleFormat] = useState<AngleFormatType>(unitSettings.angleFormat || 'dms');
 

@@ -150,34 +150,16 @@ export function generateTimeTrackName(existingTracks: SurveyTrack[]): string {
 }
 
 export function generateTimeProjectName(existingProjects: EngineeringProject[]): string {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const dateStr = `${yyyy}${mm}${dd}`;
-  const prefix = `project${dateStr}_`;
-
-  let maxSeq = 0;
+  let maxNum = 0;
   existingProjects.forEach((p) => {
-    if (!p.name) return;
-    if (p.name.startsWith(prefix)) {
-      const numPart = parseInt(p.name.replace(prefix, ''), 10);
-      if (!isNaN(numPart) && numPart > maxSeq) {
-        maxSeq = numPart;
-      }
-    } else {
-      const match = p.name.match(/^project\d{8}_(\d+)$/);
-      if (match && p.name.includes(dateStr)) {
-        const numPart = parseInt(match[1], 10);
-        if (!isNaN(numPart) && numPart > maxSeq) {
-          maxSeq = numPart;
-        }
-      }
+    const match = p.name.match(/^project\s*(\d+)$/i);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > maxNum) maxNum = n;
     }
   });
-
-  const nextSeq = String(maxSeq + 1).padStart(4, '0');
-  return `${prefix}${nextSeq}`;
+  // Default sequence starts from project 1, project 2...
+  return `project ${Math.max(1, maxNum + 1)}`;
 }
 
 export function generateTimeRouteName(existingRoutes: SurveyRoute[]): string {
@@ -220,11 +202,9 @@ function createDefaultProject(): EngineeringProject {
     '0'
   )}:${String(now.getSeconds()).padStart(2, '0')}`;
 
-  const projName = generateTimeProjectName([]);
-
   return {
-    id: `proj_${Date.now()}`,
-    name: projName,
+    id: 'proj_default_1',
+    name: 'project 1',
     operator: '测绘工程师',
     coordSystem: 'CGCS2000',
     centralMeridian: 114.0,
@@ -232,7 +212,7 @@ function createDefaultProject(): EngineeringProject {
     sevenParams: { dx: 0, dy: 0, dz: 0, rx: 0, ry: 0, rz: 0, scale: 0 },
     createTime: dateStr,
     pointCount: 0,
-    desc: '高精RTK工程测量项目',
+    desc: '初始默认工程项目 (project 1)',
   };
 }
 
@@ -437,17 +417,17 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   useEffect(() => {
     try {
       localStorage.setItem('rtk_points', JSON.stringify(points));
-      // Persist current project point library in /storage/emulated/0/com.rtkproject.files/point/
-      const projName = currentProject?.name || 'default_project';
+      // Persist current project point library in /storage/emulated/0/com.RTKproject.files/project/{projName}/points/
+      const projName = currentProject?.name || 'project 1';
       if (Array.isArray(points) && points.length > 0) {
-        fileStorageService.saveFile('point', `${projName}_points.json`, JSON.stringify(points, null, 2), 'application/json').catch(() => {});
+        fileStorageService.saveProjectFile(projName, 'points', 'points.json', JSON.stringify(points, null, 2)).catch(() => {});
         const summaryTxt = points.map((p, idx) => {
           const xStr = typeof p.x === 'number' ? p.x.toFixed(4) : String(p.x || 0);
           const yStr = typeof p.y === 'number' ? p.y.toFixed(4) : String(p.y || 0);
           const zStr = typeof p.elevation === 'number' ? p.elevation.toFixed(4) : String(p.elevation || 0);
           return `${idx + 1},${p.name || `PT${idx + 1}`},${xStr},${yStr},${zStr},${p.code || 'GPS'},${p.createdAt || ''}`;
         }).join('\n');
-        fileStorageService.saveFile('point', `${projName}_point.txt`, summaryTxt, 'text/plain;charset=utf-8').catch(() => {});
+        fileStorageService.saveProjectFile(projName, 'points', 'points.txt', summaryTxt).catch(() => {});
       }
     } catch (e) {
       console.warn('Safe storage write error for points:', e);
@@ -457,26 +437,38 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   useEffect(() => {
     try {
       localStorage.setItem('rtk_routes', JSON.stringify(routes));
+      const projName = currentProject?.name || 'project 1';
+      if (Array.isArray(routes) && routes.length > 0) {
+        fileStorageService.saveProjectFile(projName, 'routes', 'routes.json', JSON.stringify(routes, null, 2)).catch(() => {});
+      }
     } catch (e) {
       console.warn('Safe storage write error for routes:', e);
     }
-  }, [routes]);
+  }, [routes, currentProject?.name]);
 
   useEffect(() => {
     try {
       localStorage.setItem('rtk_tracks', JSON.stringify(tracks));
+      const projName = currentProject?.name || 'project 1';
+      if (Array.isArray(tracks) && tracks.length > 0) {
+        fileStorageService.saveProjectFile(projName, 'tracks', 'tracks.json', JSON.stringify(tracks, null, 2)).catch(() => {});
+      }
     } catch (e) {
       console.warn('Safe storage write error for tracks:', e);
     }
-  }, [tracks]);
+  }, [tracks, currentProject?.name]);
 
   useEffect(() => {
     try {
       localStorage.setItem('rtk_survey_logs', JSON.stringify(surveyLogs));
+      const projName = currentProject?.name || 'project 1';
+      if (Array.isArray(surveyLogs) && surveyLogs.length > 0) {
+        fileStorageService.saveProjectFile(projName, 'survey_logs', 'survey_logs.json', JSON.stringify(surveyLogs, null, 2)).catch(() => {});
+      }
     } catch (e) {
       console.warn('Safe storage write error for survey logs:', e);
     }
-  }, [surveyLogs]);
+  }, [surveyLogs, currentProject?.name]);
 
   useEffect(() => {
     try {
@@ -546,6 +538,9 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       fileStorageService.saveFile('point', `${newPoint.name}.txt`, pointRecordTxt, 'text/plain;charset=utf-8').catch(() => {});
       fileStorageService.saveFile('point', `${newPoint.name}.json`, JSON.stringify(newPoint, null, 2), 'application/json').catch(() => {});
+      // Also strictly save into active project folder: project/<projectName>/points/<pointName>.json
+      fileStorageService.saveProjectFile(currentProject.name, 'points', `${newPoint.name}.json`, JSON.stringify(newPoint, null, 2)).catch(() => {});
+      fileStorageService.saveProjectFile(currentProject.name, 'points', `${newPoint.name}.txt`, pointRecordTxt).catch(() => {});
 
       // Log measurement record
       setSurveyLogs((prev) => [
@@ -705,10 +700,12 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
     setTracks((prev) => [newTrack, ...prev]);
 
-    // Auto-save GPX and track data to /storage/emulated/0/com.rtkproject.files/track/
+    // Auto-save GPX and track data to /storage/emulated/0/com.RTKproject.files/project/<proj>/tracks/
     const gpx = exportTrackToGPX(newTrack);
     fileStorageService.saveFile('track', `${newTrack.name}.gpx`, gpx, 'application/gpx+xml').catch(() => {});
     fileStorageService.saveFile('track', `${newTrack.name}.json`, JSON.stringify(newTrack, null, 2), 'application/json').catch(() => {});
+    fileStorageService.saveProjectFile(currentProject.name, 'tracks', `${newTrack.name}.gpx`, gpx).catch(() => {});
+    fileStorageService.saveProjectFile(currentProject.name, 'tracks', `${newTrack.name}.json`, JSON.stringify(newTrack, null, 2)).catch(() => {});
 
     return newTrack;
   }, []);
@@ -879,8 +876,12 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setProjects((prev) => [newProject, ...prev]);
       setCurrentProject(newProject);
 
+      // Create full project directory tree: project/<projName>/...
+      fileStorageService.ensureProjectDirectories(newProject.name).catch(() => {});
+
       // Save project metadata file to project/ folder
       fileStorageService.saveFile('project', `${newProject.name}_config.json`, JSON.stringify(newProject, null, 2)).catch(() => {});
+      fileStorageService.saveProjectFile(newProject.name, '', 'project_config.json', JSON.stringify(newProject, null, 2)).catch(() => {});
 
       return newProject;
     },

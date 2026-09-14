@@ -159,7 +159,11 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
       if (delta < -180) delta += 360;
       lastAngleRef.current = currentAngle;
 
-      updateRotation(currentRotationRef.current + delta);
+      // [USER REQ] 增加测绘罗盘旋转阻尼：机械阻尼感系数，平稳细腻，防止触控过敏与指尖微颤
+      const DAMPING_FACTOR = 0.72;
+      const dampedDelta = delta * DAMPING_FACTOR;
+
+      updateRotation(currentRotationRef.current + dampedDelta);
     };
 
     const handleDialUp = () => {
@@ -198,12 +202,12 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           </filter>
         </defs>
 
-        {/* 1. Rotatable Dial Group (罗盘刻度触摸旋转，与指针完全脱离关联) */}
+        {/* 1. Rotatable Dial Group (罗盘刻度触摸旋转，与指针完全脱离关联，具备精密机械旋转阻尼) */}
         <g
           id="rotatable-compass-dial"
           transform={`rotate(${currentRotation}, ${cx}, ${cy})`}
           onPointerDown={handleDialPointerDown}
-          className="cursor-grab active:cursor-grabbing transition-transform duration-75 ease-out"
+          className="cursor-grab active:cursor-grabbing transition-transform duration-100 ease-out"
         >
           {/* Dial Baseplate */}
           <circle cx={cx} cy={cy} r={outerR + 5} fill="#FFFFFF" stroke="#334155" strokeWidth="2.2" />

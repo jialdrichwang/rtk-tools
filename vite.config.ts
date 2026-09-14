@@ -1,13 +1,22 @@
-import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import legacy from '@vitejs/plugin-legacy';
 import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      react(),
+      legacy({
+        targets: ['chrome >= 51', 'android >= 7', 'defaults', 'not IE 11'],
+        additionalLegacyPolyfills: ['regenerator-runtime/runtime'],
+        renderLegacyChunks: true,
+        modernPolyfills: true,
+      }),
+    ],
     build: {
-      target: 'es2018',
+      target: 'es2015',
+      cssTarget: 'chrome51',
     },
     resolve: {
       alias: {

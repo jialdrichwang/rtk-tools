@@ -139,7 +139,7 @@ public class MainActivity extends BridgeActivity {
                     appRoot.mkdirs();
                 }
 
-                String[] subFolders = new String[]{"point", "track", "project", "mapdata", "mapdata/mapcache", "points", "tracks"};
+                String[] subFolders = new String[]{"point", "track", "project", "mapdata", "mapdata/mapcache", "points", "tracks", "magnetomater calibration data"};
                 for (String folder : subFolders) {
                     File sub = new File(appRoot, folder);
                     if (!sub.exists()) {

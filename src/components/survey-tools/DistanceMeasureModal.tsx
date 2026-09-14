@@ -2,7 +2,12 @@ import React, { useState, useMemo } from 'react';
 import { useSurveyData } from '../../context/SurveyDataContext';
 import { useRTK } from '../../context/RTKContext';
 import { calculateDistanceAndAzimuth, latLonToGauss } from '../../utils/geodesy';
-import { Ruler, X, Flag, Navigation, MapPin, Compass, Crosshair, ArrowRight } from 'lucide-react';
+import {
+  fileStorageService,
+  generateSurveySequentialName,
+  ENGINEERING_SURVEY_SUBPATHS,
+} from '../../utils/fileStorageService';
+import { Ruler, X, Flag, Navigation, MapPin, Compass, Crosshair, ArrowRight, Save, Check } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 
 interface DistanceMeasureModalProps {
@@ -12,6 +17,7 @@ interface DistanceMeasureModalProps {
 export const DistanceMeasureModal: React.FC<DistanceMeasureModalProps> = ({ onClose }) => {
   const { points, currentProject } = useSurveyData();
   const { rtkState } = useRTK();
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   const [mode, setMode] = useState<'two_points' | 'dynamic_walk'>('dynamic_walk');
   const [startPointId, setStartPointId] = useState<string>(points[0]?.id || '');
@@ -137,6 +143,59 @@ export const DistanceMeasureModal: React.FC<DistanceMeasureModalProps> = ({ onCl
       originPos: { x: 0, y: 0 },
     };
   }, [calibratedStart, p1, p2, currentGauss]);
+
+  const handleSaveDistanceMeasurement = () => {
+    soundService.playSuccess();
+    const resultName = generateSurveySequentialName('distance measurement', points.map((p) => p.name));
+
+    const record = {
+      resultName,
+      surveyType: 'DISTANCE_MEASUREMENT',
+      mode,
+      details: mode === 'two_points' ? {
+        startPoint: p1 ? { name: p1.name, x: p1.x, y: p1.y, elevation: p1.elevation } : null,
+        endPoint: p2 ? { name: p2.name, x: p2.x, y: p2.y, elevation: p2.elevation } : null,
+        calculation: twoPointsCalc,
+      } : {
+        origin: calibratedStart ? {
+          type: 'CALIBRATED_START',
+          lat: calibratedStart.lat,
+          lon: calibratedStart.lon,
+          elevation: calibratedStart.alt,
+          x: calibratedStart.x,
+          y: calibratedStart.y,
+        } : (p1 ? {
+          type: 'REFERENCE_POINT',
+          name: p1.name,
+          x: p1.x,
+          y: p1.y,
+          elevation: p1.elevation,
+        } : null),
+        currentRTK: {
+          x: currentGauss.x,
+          y: currentGauss.y,
+          elevation: rtkState.currentAlt,
+          lat: rtkState.currentLat,
+          lon: rtkState.currentLon,
+          solution: rtkState.solution,
+        },
+        targetPoint: p2 ? { name: p2.name, x: p2.x, y: p2.y } : null,
+        calculation: dynamicWalkCalc,
+      },
+      timestamp: new Date().toISOString(),
+      projectName: currentProject.name,
+    };
+
+    fileStorageService.saveProjectFile(
+      currentProject.name,
+      ENGINEERING_SURVEY_SUBPATHS.DISTANCE_MEASUREMENT,
+      `${resultName}.json`,
+      JSON.stringify(record, null, 2)
+    ).catch(() => {});
+
+    setSaveSuccessMsg(`已成功归档至: distance measurement/${resultName}`);
+    setTimeout(() => setSaveSuccessMsg(null), 3000);
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-3 z-50 select-none">
@@ -422,16 +481,30 @@ export const DistanceMeasureModal: React.FC<DistanceMeasureModalProps> = ({ onCl
               )}
             </div>
           )}
+
+          {/* Success Banner */}
+          {saveSuccessMsg && (
+            <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium flex items-center gap-2 animate-fade-in">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{saveSuccessMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 flex justify-between items-center shrink-0">
-          <span className="text-[10px] font-mono text-slate-500">
-            RTK坐标: X={currentGauss.x.toFixed(2)} Y={currentGauss.y.toFixed(2)} H={rtkState.currentAlt.toFixed(2)}m
-          </span>
+          <button
+            type="button"
+            onClick={handleSaveDistanceMeasurement}
+            className="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-700 active:scale-95 text-white text-xs font-bold rounded-lg shadow-xs cursor-pointer transition flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>保存距离测量成果</span>
+          </button>
+
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
+            className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg shadow-xs cursor-pointer transition"
           >
             完成退出
           </button>

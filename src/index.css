@@ -1,4 +1,82 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Robust baseline styles for Android 7 (Chrome 51) WebViews */
+html, body, #root {
+  background-color: #f1f5f9;
+  color: #1e293b;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Modal and container solid fallbacks to eliminate transparency in legacy WebViews */
+.bg-white {
+  background-color: #ffffff;
+}
+.bg-slate-50 {
+  background-color: #f8fafc;
+}
+.bg-slate-100 {
+  background-color: #f1f5f9;
+}
+
+/* Modal dark backdrops fallback */
+.bg-slate-900\/50,
+.bg-slate-900\/60,
+.bg-slate-900\/65,
+.bg-slate-900\/80,
+.bg-slate-900\/90,
+.bg-slate-950\/75,
+.bg-black\/60 {
+  background-color: rgba(15, 23, 42, 0.65) !important;
+}
+
+/* Android 7.0 (Chrome 51) 九宫格 3x3 Flexbox Grid Polyfill */
+.nine-grid-container {
+  display: -webkit-flex !important;
+  display: flex !important;
+  -webkit-flex-direction: row !important;
+  flex-direction: row !important;
+  -webkit-flex-wrap: wrap !important;
+  flex-wrap: wrap !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.nine-grid-cell {
+  display: -webkit-flex !important;
+  display: flex !important;
+  -webkit-flex-direction: column !important;
+  flex-direction: column !important;
+  -webkit-align-items: center !important;
+  align-items: center !important;
+  -webkit-justify-content: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  width: 33.333333% !important;
+  -webkit-flex: 0 0 33.333333% !important;
+  flex: 0 0 33.333333% !important;
+  max-width: 33.333333% !important;
+  box-sizing: border-box !important;
+}
+
+/* Touch sliding and inertia scrolling rules for Android WebViews */
+.touch-scroll-y {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y !important;
+  overscroll-behavior-y: contain !important;
+}
+
+.touch-scroll-x {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-x !important;
+  overscroll-behavior-x: contain !important;
+}
 
 /* Custom prominent vertical scrollbar / slider styles to prevent tools from being obscured */
 .custom-vertical-slider::-webkit-scrollbar {

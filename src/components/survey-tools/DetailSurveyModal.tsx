@@ -2,32 +2,44 @@ import React, { useState } from 'react';
 import { useSurveyData } from '../../context/SurveyDataContext';
 import { useRTK } from '../../context/RTKContext';
 import { latLonToGauss } from '../../utils/geodesy';
-import { Trees, Zap, Check, X, MapPin } from 'lucide-react';
+import {
+  fileStorageService,
+  generateSurveySequentialName,
+  ENGINEERING_SURVEY_SUBPATHS,
+} from '../../utils/fileStorageService';
+import { Trees, Check, X, Plus, Sparkles } from 'lucide-react';
 import { soundService } from '../../utils/sound';
 
 interface DetailSurveyModalProps {
   onClose: () => void;
 }
 
+interface FeatureShortcut {
+  prefix: string;
+  code: string;
+  label: string;
+  color: string;
+}
+
 export const DetailSurveyModal: React.FC<DetailSurveyModalProps> = ({ onClose }) => {
   const { currentProject, points, addPoint } = useSurveyData();
   const { rtkState } = useRTK();
-  const [pointIndex, setPointIndex] = useState(points.length + 1);
   const [lastLoggedName, setLastLoggedName] = useState<string | null>(null);
+  const [customFeatureName, setCustomFeatureName] = useState('');
 
-  // Common surveyor feature shortcuts
-  const featureCodes = [
-    { code: '道路', label: '道路/中线', color: '#f97316' },
-    { code: '坎顶', label: '坎顶/坎底', color: '#eab308' },
-    { code: '房角', label: '建筑物房角', color: '#8b5cf6' },
-    { code: '检查井', label: '雨水/污水井', color: '#06b6d4' },
-    { code: '电杆', label: '电杆/路灯', color: '#ef4444' },
-    { code: '行道树', label: '树木/绿植', color: '#10b981' },
-    { code: '消火栓', label: '消防栓', color: '#ec4899' },
-    { code: '围墙', label: '围墙角点', color: '#64748b' },
+  // Fixed standard surveyor feature definitions matching user specifications
+  const featureCodes: FeatureShortcut[] = [
+    { prefix: 'road', code: 'ROAD', label: '道路 (road)', color: '#f97316' },
+    { prefix: 'corner_of_the_room', code: 'BUILDING_CORNER', label: '房角 (corner_of_the_room)', color: '#8b5cf6' },
+    { prefix: 'utility_pole', code: 'POLE', label: '电杆 (utility_pole)', color: '#ef4444' },
+    { prefix: 'Fence_', code: 'FENCE', label: '围墙 (Fence_)', color: '#64748b' },
+    { prefix: 'manhole', code: 'MANHOLE', label: '检查井 (manhole)', color: '#06b6d4' },
+    { prefix: 'tree', code: 'TREE', label: '行道树 (tree)', color: '#10b981' },
+    { prefix: 'hydrant', code: 'HYDRANT', label: '消火栓 (hydrant)', color: '#ec4899' },
+    { prefix: 'ridge', code: 'RIDGE', label: '坎顶/坎底 (ridge)', color: '#eab308' },
   ];
 
-  const handleQuickLog = (code: string, color: string) => {
+  const handleQuickLog = (feature: FeatureShortcut | { prefix: string; code: string; label: string; color: string }) => {
     soundService.playClick();
     const gauss = latLonToGauss(
       rtkState.currentLat,
@@ -36,18 +48,23 @@ export const DetailSurveyModal: React.FC<DetailSurveyModalProps> = ({ onClose })
       currentProject.coordSystem
     );
 
-    const name = `碎部_${pointIndex}`;
-    addPoint({
-      name,
-      code,
+    // Generate prefix + YYYYMMDD_0001, 0002...
+    const pointName = generateSurveySequentialName(
+      feature.prefix,
+      points.map((p) => p.name)
+    );
+
+    const savedPoint = addPoint({
+      name: pointName,
+      code: feature.code,
       lat: rtkState.currentLat,
       lon: rtkState.currentLon,
       elevation: rtkState.currentAlt,
       x: gauss.x,
       y: gauss.y,
       coordSystem: currentProject.coordSystem,
-      desc: `碎部测量快捷采集 [${code}]`,
-      color,
+      desc: `碎部测量 [${feature.label}]`,
+      color: feature.color,
       hrms: rtkState.hrms,
       vrms: rtkState.vrms,
       solutionType: rtkState.solution,
@@ -56,17 +73,36 @@ export const DetailSurveyModal: React.FC<DetailSurveyModalProps> = ({ onClose })
       projectId: currentProject.id,
     });
 
-    setLastLoggedName(name);
-    setPointIndex((prev) => prev + 1);
+    // Save to: project/工程项目文件名/Engineering Surveying/Detail Surveying/<pointName>
+    fileStorageService.saveProjectFile(
+      currentProject.name,
+      ENGINEERING_SURVEY_SUBPATHS.DETAIL_SURVEYING,
+      `${pointName}.json`,
+      JSON.stringify(savedPoint, null, 2)
+    ).catch(() => {});
+
+    setLastLoggedName(pointName);
+  };
+
+  const handleLogCustomFeature = () => {
+    const cleanName = customFeatureName.trim();
+    if (!cleanName) return;
+
+    handleQuickLog({
+      prefix: cleanName,
+      code: 'CUSTOM_DETAIL',
+      label: `自定义碎部(${cleanName})`,
+      color: '#3b82f6',
+    });
   };
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 z-50 select-none">
-      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
+      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
         <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Trees className="w-5 h-5 text-emerald-600" />
-            <h2 className="text-sm font-bold text-slate-900">碎部特征快捷测量 (Detail Mapping)</h2>
+            <h2 className="text-sm font-bold text-slate-900">碎部特征测量 (Detail Surveying)</h2>
           </div>
           <button
             onClick={onClose}
@@ -76,37 +112,73 @@ export const DetailSurveyModal: React.FC<DetailSurveyModalProps> = ({ onClose })
           </button>
         </div>
 
-        <div className="p-4 space-y-3">
+        <div className="p-4 space-y-3.5 overflow-y-auto">
           {/* Current RTK Status Banner */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between text-xs font-mono">
             <div>
-              <span className="text-slate-500 block text-[10px] font-sans font-medium">待采点名:</span>
-              <span className="text-slate-900 font-bold">碎部_{pointIndex}</span>
+              <span className="text-slate-500 block text-[10px] font-sans font-medium">上次采集点:</span>
+              <span className="text-emerald-700 font-bold">{lastLoggedName || '待采第一点'}</span>
             </div>
             <div className="text-right">
-              <span className="text-slate-500 block text-[10px] font-sans font-medium">高程:</span>
-              <span className="text-emerald-600 font-bold">{rtkState.currentAlt.toFixed(2)}m</span>
+              <span className="text-slate-500 block text-[10px] font-sans font-medium">当前RTK高程:</span>
+              <span className="text-blue-600 font-bold">{rtkState.currentAlt.toFixed(2)}m</span>
             </div>
           </div>
 
-          {/* Feature Shortcuts Grid (1-click point recording) */}
-          <div className="grid grid-cols-2 gap-2.5">
-            {featureCodes.map((f) => (
+          {/* Custom Feature Name Input */}
+          <div className="bg-blue-50/60 border border-blue-200/80 rounded-xl p-3 space-y-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-blue-900">
+              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+              <span>自定义碎部名 (Custom Feature Name)</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customFeatureName}
+                onChange={(e) => setCustomFeatureName(e.target.value)}
+                placeholder="例如: curb, pipe, ditch..."
+                className="flex-1 bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+              />
               <button
-                key={f.code}
-                onClick={() => handleQuickLog(f.code, f.color)}
-                className="p-3 bg-slate-50 hover:bg-slate-100 active:scale-95 border border-slate-200 hover:border-emerald-500/60 rounded-xl flex items-center gap-2.5 transition text-left cursor-pointer shadow-xs"
+                type="button"
+                onClick={handleLogCustomFeature}
+                disabled={!customFeatureName.trim()}
+                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold px-3 py-2 rounded-lg transition active:scale-95 flex items-center gap-1 cursor-pointer shrink-0 shadow-xs"
               >
-                <div
-                  className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs"
-                  style={{ backgroundColor: f.color }}
-                />
-                <div>
-                  <div className="text-xs font-bold text-slate-900">{f.code}</div>
-                  <div className="text-[10px] text-slate-500">{f.label}</div>
-                </div>
+                <Plus className="w-3.5 h-3.5" />
+                <span>采集自定义</span>
               </button>
-            ))}
+            </div>
+            <p className="text-[10px] text-blue-600/80">
+              命名规则: {customFeatureName.trim() || '自定义名'}YYYYMMDD_0001, 0002...
+            </p>
+          </div>
+
+          {/* Standard Feature Shortcuts Grid (1-click point recording) */}
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-tight block">
+              标准碎部特征快速采集 (点击直接记录):
+            </span>
+            <div className="grid grid-cols-2 gap-2">
+              {featureCodes.map((f) => (
+                <button
+                  key={f.prefix}
+                  onClick={() => handleQuickLog(f)}
+                  className="p-2.5 bg-slate-50 hover:bg-slate-100 active:scale-95 border border-slate-200 hover:border-emerald-500/60 rounded-xl flex items-center gap-2 transition text-left cursor-pointer shadow-xs"
+                >
+                  <div
+                    className="w-3.5 h-3.5 rounded-full shrink-0 shadow-2xs"
+                    style={{ backgroundColor: f.color }}
+                  />
+                  <div className="truncate">
+                    <span className="text-xs font-bold text-slate-800 block truncate">{f.label}</span>
+                    <span className="text-[10px] text-slate-400 font-mono block">
+                      {f.prefix}YYYYMMDD_...
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
 
           {lastLoggedName && (
@@ -115,6 +187,13 @@ export const DetailSurveyModal: React.FC<DetailSurveyModalProps> = ({ onClose })
               <span>已成功采入: <b>{lastLoggedName}</b></span>
             </div>
           )}
+
+          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-500">
+            <span className="font-semibold text-slate-700">自动归档路径:</span><br />
+            <code className="text-[10px] text-blue-700 break-all">
+              project/{currentProject.name}/Engineering Surveying/Detail Surveying/
+            </code>
+          </div>
         </div>
 
         <div className="bg-slate-50 px-4 py-2.5 border-t border-slate-200 flex justify-end">

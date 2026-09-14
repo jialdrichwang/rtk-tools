@@ -116,6 +116,7 @@ export const StandardCompassDial: React.FC<StandardCompassDialProps> = ({
         <circle cx={cx} cy={cy} r={ringInnerR - 22} fill="none" stroke="#F1F5F9" strokeWidth="0.8" strokeDasharray="3 3" />
 
         {/* Rotating Dial Group: Rotates by -heading so top 12 o'clock always aligns with current course */}
+        {/* [USER REQ] 标准航向罗盘的指针与罗盘耦合：指针置于旋转盘内，红北针严格锁定盘面0°(北)，盘针整体同步旋转 */}
         <g
           id="standard-rotating-dial-plate"
           transform={`rotate(${-heading}, ${cx}, ${cy})`}
@@ -205,67 +206,66 @@ export const StandardCompassDial: React.FC<StandardCompassDialProps> = ({
               </text>
             );
           })}
-        </g>
 
-        {/* Center Magnetic Pointer (North Red, South Slate with center pivot) */}
-        {/* Needle NS letters moved closer to center diamond expansion as requested */}
-        <g id="standard-center-needle" filter="url(#stdDropShadow)">
-          {/* North Half: sharp slender red needle pointing up towards 12 o'clock */}
-          <path
-            d={`M${cx} 42 L${cx - 4.5} ${cy - 12} L${cx} ${cy - 6} L${cx + 4.5} ${cy - 12} Z`}
-            fill="#EF4444"
-            stroke="#DC2626"
-            strokeWidth="0.8"
-          />
-          {/* North facet highlight */}
-          <path
-            d={`M${cx} 42 L${cx - 4.5} ${cy - 12} L${cx} ${cy - 6} Z`}
-            fill="#DC2626"
-          />
+          {/* Center Magnetic Pointer (Coupled with Dial Plate: North Red points directly to 北 N 0°) */}
+          <g id="standard-center-needle" filter="url(#stdDropShadow)">
+            {/* North Half: sharp slender red needle pointing up towards 12 o'clock 北 */}
+            <path
+              d={`M${cx} 42 L${cx - 4.5} ${cy - 12} L${cx} ${cy - 6} L${cx + 4.5} ${cy - 12} Z`}
+              fill="#EF4444"
+              stroke="#DC2626"
+              strokeWidth="0.8"
+            />
+            {/* North facet highlight */}
+            <path
+              d={`M${cx} 42 L${cx - 4.5} ${cy - 12} L${cx} ${cy - 6} Z`}
+              fill="#DC2626"
+            />
 
-          {/* South Half: sharp slender slate needle pointing down towards 6 o'clock */}
-          <path
-            d={`M${cx} ${cy * 2 - 42} L${cx - 4.5} ${cy + 12} L${cx} ${cy + 6} L${cx + 4.5} ${cy + 12} Z`}
-            fill="#94A3B8"
-            stroke="#64748B"
-            strokeWidth="0.8"
-          />
-          {/* South facet highlight */}
-          <path
-            d={`M${cx} ${cy * 2 - 42} L${cx - 4.5} ${cy + 12} L${cx} ${cy + 6} Z`}
-            fill="#64748B"
-          />
+            {/* South Half: sharp slender slate needle pointing down towards 6 o'clock 南 */}
+            <path
+              d={`M${cx} ${cy * 2 - 42} L${cx - 4.5} ${cy + 12} L${cx} ${cy + 6} L${cx + 4.5} ${cy + 12} Z`}
+              fill="#94A3B8"
+              stroke="#64748B"
+              strokeWidth="0.8"
+            />
+            {/* South facet highlight */}
+            <path
+              d={`M${cx} ${cy * 2 - 42} L${cx - 4.5} ${cy + 12} L${cx} ${cy + 6} Z`}
+              fill="#64748B"
+            />
 
-          {/* N & S letters placed near center diamond expansion area for clarity & beauty */}
-          <text
-            x={cx}
-            y={cy - 22}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fill="#FFFFFF"
-            fontSize="9"
-            fontWeight="900"
-            fontFamily="system-ui, -apple-system, sans-serif"
-          >
-            N
-          </text>
-          <text
-            x={cx}
-            y={cy + 22}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fill="#FFFFFF"
-            fontSize="9"
-            fontWeight="900"
-            fontFamily="system-ui, -apple-system, sans-serif"
-          >
-            S
-          </text>
+            {/* N & S letters placed near center diamond expansion area for clarity & beauty */}
+            <text
+              x={cx}
+              y={cy - 22}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill="#FFFFFF"
+              fontSize="9"
+              fontWeight="900"
+              fontFamily="system-ui, -apple-system, sans-serif"
+            >
+              N
+            </text>
+            <text
+              x={cx}
+              y={cy + 22}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fill="#FFFFFF"
+              fontSize="9"
+              fontWeight="900"
+              fontFamily="system-ui, -apple-system, sans-serif"
+            >
+              S
+            </text>
 
-          {/* Center Hub & Jewel Cap */}
-          <circle cx={cx} cy={cy} r="10" fill="url(#stdCenterHub)" stroke="#E2E8F0" strokeWidth="1.8" />
-          <circle cx={cx} cy={cy} r="4" fill="#EF4444" stroke="#DC2626" strokeWidth="1" />
-          <circle cx={cx - 1.2} cy={cy - 1.2} r="1" fill="#FFFFFF" opacity="0.8" />
+            {/* Center Hub & Jewel Cap */}
+            <circle cx={cx} cy={cy} r="10" fill="url(#stdCenterHub)" stroke="#E2E8F0" strokeWidth="1.8" />
+            <circle cx={cx} cy={cy} r="4" fill="#EF4444" stroke="#DC2626" strokeWidth="1" />
+            <circle cx={cx - 1.2} cy={cy - 1.2} r="1" fill="#FFFFFF" opacity="0.8" />
+          </g>
         </g>
 
         {/* Top Fixed Sighting Index Marker (12 o'clock collimation needle pointer) */}

@@ -1,19 +1,39 @@
 /**
  * RTK Survey App Native File Storage Service
- * Manages persistent storage at: /storage/emulated/0/com.rtkproject.files/
- * Subdirectories:
- *  - point/ (and alias points/)
- *  - track/ (and alias tracks/)
- *  - project/
- *  - mapdata/
+ * Primary Storage Root: /storage/emulated/0/com.RTKproject.files/
+ * Fixed Top-level Folders:
+ *  1. magnetometer calibration data
+ *  2. mapdata
+ *  3. project
+ * Inside project/<projectName>/
+ *  - points/
+ *  - tracks/
+ *  - Engineering Surveying/
+ *      ├── project point collection/
+ *      ├── Detail Surveying/
+ *      ├── Point layout results/
+ *      ├── Isometric setting-out results/
+ *      ├── Linear setting-out results/
+ *      ├── Area measurement result/
+ *      ├── Length measurement result/
+ *      └── Slope measurement results/
  */
 
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 
-export type StorageFolder = 'point' | 'track' | 'project' | 'mapdata' | 'points' | 'tracks';
+export type StorageFolder =
+  | 'point'
+  | 'track'
+  | 'project'
+  | 'mapdata'
+  | 'points'
+  | 'tracks'
+  | 'magnetometer calibration data'
+  | 'magnetomater calibration data'
+  | (string & {});
 
 export interface StorageFolderInfo {
-  name: 'point' | 'track' | 'project' | 'mapdata' | 'points' | 'tracks';
+  name: string;
   displayName: string;
   path: string;
   count: number;
@@ -22,15 +42,42 @@ export interface StorageFolderInfo {
 
 export interface StoredFileInfo {
   name: string;
-  folder: StorageFolder;
+  folder: string;
+  path?: string;
   size?: number;
   mtime?: number;
   contentSnippet?: string;
 }
 
-const DEFAULT_ROOT_DIR = '/storage/emulated/0/com.rtkproject.files';
+const DEFAULT_ROOT_DIR = '/storage/emulated/0/com.RTKproject.files';
 const STORAGE_ROOT_KEY = 'rtk_custom_storage_root';
-const SUBFOLDERS: StorageFolder[] = ['point', 'track', 'project', 'mapdata', 'points', 'tracks'];
+
+// 3 Primary Mandatory Directories
+const PRIMARY_TOP_FOLDERS = [
+  'magnetometer calibration data',
+  'mapdata',
+  'project',
+];
+
+// Engineering Surveying Subcategories under project/<projectName>/Engineering Surveying/
+export const ENGINEERING_SURVEY_SUBPATHS = {
+  POINT_COLLECTION: 'Engineering Surveying/project point collection',
+  DETAIL_SURVEYING: 'Engineering Surveying/Detail Surveying',
+  POINT_LAYOUT_RESULTS: 'Engineering Surveying/Point layout results',
+  ISOMETRIC_SETTING_OUT: 'Engineering Surveying/Isometric setting-out results',
+  LINEAR_SETTING_OUT: 'Engineering Surveying/Linear setting-out results',
+  AREA_MEASUREMENT: 'Engineering Surveying/area measurement',
+  DISTANCE_MEASUREMENT: 'Engineering Surveying/distance measurement',
+  SLOPE_MEASUREMENT: 'Engineering Surveying/slope measurement',
+
+  // Backward-compatible aliases
+  POINT_STAKEOUT: 'Engineering Surveying/Point layout results',
+  ISOMETRIC_STAKEOUT: 'Engineering Surveying/Isometric setting-out results',
+  LINEAR_STAKEOUT: 'Engineering Surveying/Linear setting-out results',
+  AREA_MEASURE: 'Engineering Surveying/area measurement',
+  LENGTH_MEASURE: 'Engineering Surveying/distance measurement',
+  SLOPE_MEASURE: 'Engineering Surveying/slope measurement',
+} as const;
 
 class FileStorageService {
   private currentRootDir: string = DEFAULT_ROOT_DIR;
@@ -94,12 +141,12 @@ class FileStorageService {
   }
 
   /**
-   * Initializes root directory and all required subdirectories:
-   * /storage/emulated/0/com.rtkproject.files/
-   *  ├── point/ (and points/)
-   *  ├── track/ (and tracks/)
-   *  ├── project/
-   *  └── mapdata/
+   * Initializes root directory and the 3 primary subdirectories:
+   * /storage/emulated/0/com.RTKproject.files/
+   *  ├── magnetometer calibration data/
+   *  ├── mapdata/
+   *  └── project/
+   *       └── project 1/ (mandatory default project)
    */
   public async initDirectories(): Promise<boolean> {
     try {
@@ -107,7 +154,7 @@ class FileStorageService {
         // Ensure root folder exists
         try {
           await Filesystem.mkdir({
-            path: 'com.rtkproject.files',
+            path: 'com.RTKproject.files',
             directory: Directory.ExternalStorage,
             recursive: true,
           });
@@ -115,10 +162,10 @@ class FileStorageService {
           // ignore if already exists
         }
 
-        for (const sub of SUBFOLDERS) {
+        for (const sub of PRIMARY_TOP_FOLDERS) {
           try {
             await Filesystem.mkdir({
-              path: `com.rtkproject.files/${sub}`,
+              path: `com.RTKproject.files/${sub}`,
               directory: Directory.ExternalStorage,
               recursive: true,
             });
@@ -127,11 +174,173 @@ class FileStorageService {
           }
         }
       }
+
+      // Ensure default 'project 1' directory exists
+      await this.ensureProjectDirectories('project 1');
       return true;
     } catch (e) {
       console.warn('initDirectories error:', e);
       return false;
     }
+  }
+
+  /**
+   * Ensures a project's full directory tree exists:
+   * project/<projectName>/
+   *   ├── points/
+   *   ├── tracks/
+   *   └── Engineering Surveying/
+   *        ├── project point collection/
+   *        ├── Detail Surveying/
+   *        ├── Point layout results/
+   *        ├── Isometric setting-out results/
+   *        ├── Linear setting-out results/
+   *        ├── Area measurement result/
+   *        ├── Length measurement result/
+   *        └── Slope measurement results/
+   */
+  public async ensureProjectDirectories(projectName: string = 'project 1'): Promise<void> {
+    const cleanProj = projectName.trim() || 'project 1';
+    const subPaths = [
+      `project/${cleanProj}/points`,
+      `project/${cleanProj}/tracks`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.POINT_COLLECTION}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.DETAIL_SURVEYING}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.POINT_STAKEOUT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.ISOMETRIC_STAKEOUT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.LINEAR_STAKEOUT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.AREA_MEASURE}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.LENGTH_MEASURE}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.SLOPE_MEASURE}`,
+    ];
+
+    if (this.isCapacitorNative) {
+      for (const p of subPaths) {
+        try {
+          await Filesystem.mkdir({
+            path: `com.RTKproject.files/${p}`,
+            directory: Directory.ExternalStorage,
+            recursive: true,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  /**
+   * Saves a file into a project's sub-path, e.g.:
+   * project/project 1/Engineering Surveying/project point collection/pointcollection20260915_0001.json
+   */
+  public async saveProjectFile(
+    projectName: string = 'project 1',
+    subCategoryPath: string,
+    filename: string,
+    content: string | Blob
+  ): Promise<{ success: boolean; path: string }> {
+    const cleanProj = projectName.trim() || 'project 1';
+    const stringContent = typeof content === 'string' ? content : await this.blobToString(content);
+    const relPath = `project/${cleanProj}/${subCategoryPath}/${filename}`.replace(/\/+/g, '/');
+    const fullPath = `${this.currentRootDir}/${relPath}`;
+
+    try {
+      if (this.isCapacitorNative) {
+        await Filesystem.writeFile({
+          path: `com.RTKproject.files/${relPath}`,
+          data: stringContent,
+          directory: Directory.ExternalStorage,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        });
+      }
+      this.saveToVirtualStorage(`proj_${cleanProj}_${subCategoryPath}`, filename, stringContent);
+      return { success: true, path: fullPath };
+    } catch (e) {
+      console.warn('saveProjectFile fallback to virtual storage:', e);
+      this.saveToVirtualStorage(`proj_${cleanProj}_${subCategoryPath}`, filename, stringContent);
+      return { success: true, path: fullPath };
+    }
+  }
+
+  /**
+   * Reads a project file from a given sub-path
+   */
+  public async readProjectFile(
+    projectName: string = 'project 1',
+    subCategoryPath: string,
+    filename: string
+  ): Promise<string | null> {
+    const cleanProj = projectName.trim() || 'project 1';
+    const relPath = `project/${cleanProj}/${subCategoryPath}/${filename}`.replace(/\/+/g, '/');
+
+    try {
+      if (this.isCapacitorNative) {
+        const res = await Filesystem.readFile({
+          path: `com.RTKproject.files/${relPath}`,
+          directory: Directory.ExternalStorage,
+          encoding: Encoding.UTF8,
+        });
+        if (res && res.data) {
+          return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+        }
+      }
+    } catch {
+      // fallback to virtual
+    }
+
+    const virtualKey = `proj_${cleanProj}_${subCategoryPath}`;
+    const virtual = (await this.readFromVirtualStorageAsync(virtualKey, filename)) || this.readFromVirtualStorage(virtualKey, filename);
+    return virtual;
+  }
+
+  /**
+   * Lists files under a specific project sub-path
+   */
+  public async listProjectFiles(
+    projectName: string = 'project 1',
+    subCategoryPath: string = 'points'
+  ): Promise<StoredFileInfo[]> {
+    const cleanProj = projectName.trim() || 'project 1';
+    const relPath = `project/${cleanProj}/${subCategoryPath}`.replace(/\/+/g, '/');
+    const virtualKey = `proj_${cleanProj}_${subCategoryPath}`;
+    const list: StoredFileInfo[] = [];
+
+    const virtualFiles = this.listFromVirtualStorage(virtualKey);
+    for (const vf of virtualFiles) {
+      list.push({
+        ...vf,
+        folder: relPath,
+        path: `${this.currentRootDir}/${relPath}/${vf.name}`,
+      });
+    }
+
+    if (this.isCapacitorNative) {
+      try {
+        const nativeList = await Filesystem.readdir({
+          path: `com.RTKproject.files/${relPath}`,
+          directory: Directory.ExternalStorage,
+        });
+        if (nativeList && nativeList.files) {
+          nativeList.files.forEach((file) => {
+            const fileName = typeof file === 'string' ? file : file.name;
+            if (!list.some((it) => it.name === fileName)) {
+              list.push({
+                name: fileName,
+                folder: relPath,
+                path: `${this.currentRootDir}/${relPath}/${fileName}`,
+                size: typeof file === 'object' ? file.size : undefined,
+                mtime: typeof file === 'object' ? file.mtime : undefined,
+              });
+            }
+          });
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return list;
   }
 
   /**
@@ -145,12 +354,14 @@ class FileStorageService {
   ): Promise<{ success: boolean; path: string }> {
     const stringContent = typeof content === 'string' ? content : await this.blobToString(content);
     
-    // Determine target folders (write to both singular & plural so user sees it regardless of folder name)
+    // Determine target folders (write to both singular & plural or alias forms)
     const targets: StorageFolder[] = [];
     if (subfolder === 'point' || subfolder === 'points') {
       targets.push('point', 'points');
     } else if (subfolder === 'track' || subfolder === 'tracks') {
       targets.push('track', 'tracks');
+    } else if (subfolder === 'magnetomater calibration data' || subfolder === 'magnetometer calibration data') {
+      targets.push('magnetomater calibration data', 'magnetometer calibration data');
     } else {
       targets.push(subfolder);
     }
@@ -202,6 +413,8 @@ class FileStorageService {
       checkFolders.push('point', 'points');
     } else if (subfolder === 'track' || subfolder === 'tracks') {
       checkFolders.push('track', 'tracks');
+    } else if (subfolder === 'magnetomater calibration data' || subfolder === 'magnetometer calibration data') {
+      checkFolders.push('magnetomater calibration data', 'magnetometer calibration data');
     } else {
       checkFolders.push(subfolder);
     }
@@ -239,6 +452,8 @@ class FileStorageService {
       checkFolders.push('point', 'points');
     } else if (subfolder === 'track' || subfolder === 'tracks') {
       checkFolders.push('track', 'tracks');
+    } else if (subfolder === 'magnetomater calibration data' || subfolder === 'magnetometer calibration data') {
+      checkFolders.push('magnetomater calibration data', 'magnetometer calibration data');
     } else {
       checkFolders.push(subfolder);
     }
@@ -291,6 +506,8 @@ class FileStorageService {
       targets.push('point', 'points');
     } else if (subfolder === 'track' || subfolder === 'tracks') {
       targets.push('track', 'tracks');
+    } else if (subfolder === 'magnetomater calibration data' || subfolder === 'magnetometer calibration data') {
+      targets.push('magnetomater calibration data', 'magnetometer calibration data');
     } else {
       targets.push(subfolder);
     }
@@ -312,7 +529,7 @@ class FileStorageService {
   }
 
   /**
-   * Gets overview count of files in all 4 primary folders
+   * Gets overview count of files in all primary folders
    */
   public async getFolderStats(): Promise<StorageFolderInfo[]> {
     const infos: StorageFolderInfo[] = [
@@ -343,6 +560,13 @@ class FileStorageService {
         path: `${this.currentRootDir}/mapdata`,
         count: (await this.listFiles('mapdata')).length,
         description: '保存卫星影像瓦片缓存、CAD底图及矢量图层',
+      },
+      {
+        name: 'magnetomater calibration data',
+        displayName: '磁力计校准库 (magnetomater calibration data)',
+        path: `${this.currentRootDir}/magnetomater calibration data`,
+        count: (await this.listFiles('magnetomater calibration data')).length,
+        description: '保存空间磁力分析动作解算、手机本性硬磁偏置、物理指南针比对及现场工区自适应校准文件',
       },
     ];
     return infos;
@@ -488,4 +712,66 @@ class FileStorageService {
 }
 
 export const fileStorageService = new FileStorageService();
+
+/**
+ * Returns date stamp formatted as YYYYMMDD (e.g. 20260915)
+ */
+export function getDateStamp(d: Date = new Date()): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
+
+/**
+ * Formats standard survey item name with 4-digit sequential suffix:
+ * e.g. prefix + YYYYMMDD + '_' + 0001
+ */
+export function generateSurveySequentialName(
+  prefix: string,
+  existingNames: string[],
+  dateStr: string = getDateStamp()
+): string {
+  const basePrefix = `${prefix}${dateStr}_`;
+  let maxSeq = 0;
+
+  existingNames.forEach((name) => {
+    if (!name) return;
+    if (name.startsWith(basePrefix)) {
+      const numStr = name.slice(basePrefix.length).replace(/\D.*$/, '');
+      const num = parseInt(numStr, 10);
+      if (!isNaN(num) && num > maxSeq) {
+        maxSeq = num;
+      }
+    }
+  });
+
+  const nextSeq = String(maxSeq + 1).padStart(4, '0');
+  return `${basePrefix}${nextSeq}`;
+}
+
+/**
+ * Formats Area Surveying folder and node names:
+ * Folder: area1@YYYYMMDD, area2@YYYYMMDD...
+ * Node: Area node_0001, Area node_0002...
+ */
+export function generateAreaMeasurementName(existingAreaNames: string[], dateStr: string = getDateStamp()) {
+  let maxAreaIndex = 0;
+  existingAreaNames.forEach((name) => {
+    const match = name.match(/area(\d+)@/i);
+    if (match) {
+      const idx = parseInt(match[1], 10);
+      if (idx > maxAreaIndex) maxAreaIndex = idx;
+    }
+  });
+
+  const nextAreaIdx = maxAreaIndex + 1;
+  const folderName = `area${nextAreaIdx}@${dateStr}`;
+
+  const getNodeName = (nodeIndex: number) => {
+    return `Area node_${String(nodeIndex).padStart(4, '0')}`;
+  };
+
+  return { folderName, getNodeName, areaIndex: nextAreaIdx };
+}
 

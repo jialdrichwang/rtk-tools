@@ -40,6 +40,7 @@ import { HistoryDataImportModal } from './components/tools/HistoryDataImportModa
 import { GpsPermissionPromptModal } from './components/tools/GpsPermissionPromptModal';
 import { BluetoothScannerModal } from './components/tools/BluetoothScannerModal';
 import { NmeaMonitorModal } from './components/tools/NmeaMonitorModal';
+import { Save, AlertCircle, LogOut, CheckCircle2, X } from 'lucide-react';
 
 import { App as CapApp } from '@capacitor/app';
 import { ScreenType, SurveyPoint } from './types';
@@ -66,9 +67,16 @@ export const forceExitApplication = () => {
 
 function MainLayout() {
   const { rtkState, fetchRealGPSPosition, setShowBluetoothModal } = useRTK();
-  const { activeRecording, appendTrackPoint } = useSurveyData();
+  const { currentProject, points, tracks, activeRecording, appendTrackPoint } = useSurveyData();
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('home');
   const [screenStack, setScreenStack] = useState<ScreenType[]>([]);
+
+  // Exit App and Engineering Survey confirmation dialog states
+  const [showExitAppDialog, setShowExitAppDialog] = useState(false);
+  const [showExitSurveyConfirm, setShowExitSurveyConfirm] = useState(false);
+  const [pendingTargetScreen, setPendingTargetScreen] = useState<ScreenType | null>(null);
+  const [exitSurveyToast, setExitSurveyToast] = useState<string | null>(null);
+  const [isSavingOnExit, setIsSavingOnExit] = useState(false);
 
   // Persistent track point logger loop when recording in background (Screen-off resilient)
   const rtkStateRef = useRef(rtkState);
@@ -118,26 +126,42 @@ function MainLayout() {
   const [exportImportTab, setExportImportTab] = useState<'export' | 'import'>('export');
   const [selectedPointForStakeout, setSelectedPointForStakeout] = useState<SurveyPoint | undefined>();
 
-  // Navigation handlers
+  // Navigation handlers with Engineering Survey exit interceptor
   const navigateTo = (screen: ScreenType) => {
     soundService.playClick();
+    if (currentScreen === 'engineering_survey' && screen !== 'engineering_survey') {
+      setPendingTargetScreen(screen);
+      setShowExitSurveyConfirm(true);
+      return;
+    }
     setScreenStack((prev) => [...prev, currentScreen]);
     setCurrentScreen(screen);
   };
 
   const handleBack = () => {
     soundService.playClick();
+    if (currentScreen === 'engineering_survey') {
+      const target = screenStack.length > 0 ? screenStack[screenStack.length - 1] : 'home';
+      setPendingTargetScreen(target);
+      setShowExitSurveyConfirm(true);
+      return;
+    }
     if (screenStack.length > 0) {
       const prev = screenStack[screenStack.length - 1];
       setScreenStack((s) => s.slice(0, -1));
       setCurrentScreen(prev);
     } else {
-      setCurrentScreen('home');
+      setShowExitAppDialog(true);
     }
   };
 
   const handleHome = () => {
     soundService.playClick();
+    if (currentScreen === 'engineering_survey') {
+      setPendingTargetScreen('home');
+      setShowExitSurveyConfirm(true);
+      return;
+    }
     setScreenStack([]);
     setCurrentScreen('home');
   };
@@ -157,10 +181,81 @@ function MainLayout() {
     setActiveModal('export_import');
   };
 
-  // Double back press exit state
-  const [showExitPrompt, setShowExitPrompt] = useState(false);
-  const lastBackPressTimeRef = useRef(0);
-  const exitTimerRef = useRef<any>(null);
+  // Exit Engineering Survey actions
+  const handleSaveAndExitSurvey = async () => {
+    setIsSavingOnExit(true);
+    soundService.playSuccess();
+    try {
+      const projName = currentProject?.name || 'project 1';
+      if (Array.isArray(points) && points.length > 0) {
+        await fileStorageService.saveProjectFile(projName, 'points', 'points.json', JSON.stringify(points, null, 2));
+      }
+      if (Array.isArray(tracks) && tracks.length > 0) {
+        await fileStorageService.saveProjectFile(projName, 'tracks', 'tracks.json', JSON.stringify(tracks, null, 2));
+      }
+      setExitSurveyToast(`已成功保存当前工程【${projName}】测量数据！`);
+      setTimeout(() => setExitSurveyToast(null), 2500);
+    } catch (e) {
+      console.warn('Error saving data before exiting survey:', e);
+    } finally {
+      setIsSavingOnExit(false);
+      setShowExitSurveyConfirm(false);
+      const target = pendingTargetScreen || 'home';
+      setPendingTargetScreen(null);
+      if (target === 'home') {
+        setScreenStack([]);
+        setCurrentScreen('home');
+      } else {
+        if (screenStack.length > 0) {
+          setScreenStack((s) => s.slice(0, -1));
+        }
+        setCurrentScreen(target);
+      }
+    }
+  };
+
+  const handleDiscardAndExitSurvey = () => {
+    soundService.playClick();
+    setShowExitSurveyConfirm(false);
+    const target = pendingTargetScreen || 'home';
+    setPendingTargetScreen(null);
+    if (target === 'home') {
+      setScreenStack([]);
+      setCurrentScreen('home');
+    } else {
+      if (screenStack.length > 0) {
+        setScreenStack((s) => s.slice(0, -1));
+      }
+      setCurrentScreen(target);
+    }
+  };
+
+  // Exit App actions
+  const handleSaveAndExitApp = async () => {
+    setIsSavingOnExit(true);
+    soundService.playSuccess();
+    try {
+      const projName = currentProject?.name || 'project 1';
+      if (Array.isArray(points) && points.length > 0) {
+        await fileStorageService.saveProjectFile(projName, 'points', 'points.json', JSON.stringify(points, null, 2));
+      }
+      if (Array.isArray(tracks) && tracks.length > 0) {
+        await fileStorageService.saveProjectFile(projName, 'tracks', 'tracks.json', JSON.stringify(tracks, null, 2));
+      }
+    } catch (e) {
+      console.warn('Error saving before exit app:', e);
+    } finally {
+      setIsSavingOnExit(false);
+      setShowExitAppDialog(false);
+      forceExitApplication();
+    }
+  };
+
+  const handleDirectExitApp = () => {
+    soundService.playClick();
+    setShowExitAppDialog(false);
+    forceExitApplication();
+  };
 
   // Expose global handler for Android WebView's onBackPressed and Capacitor App backButton
   useEffect(() => {
@@ -168,32 +263,36 @@ function MainLayout() {
       // 1. If modal is open, close modal
       if (activeModal) {
         setActiveModal(null);
-        return true; // handled
+        return true;
       }
 
-      // 2. If inside a sub-screen, go back
+      // 2. If exit dialogs are open, close them
+      if (showExitAppDialog) {
+        setShowExitAppDialog(false);
+        return true;
+      }
+      if (showExitSurveyConfirm) {
+        setShowExitSurveyConfirm(false);
+        return true;
+      }
+
+      // 3. If in engineering survey, trigger prompt
+      if (currentScreen === 'engineering_survey') {
+        const target = screenStack.length > 0 ? screenStack[screenStack.length - 1] : 'home';
+        setPendingTargetScreen(target);
+        setShowExitSurveyConfirm(true);
+        return true;
+      }
+
+      // 4. If inside a sub-screen, go back
       if (currentScreen !== 'home') {
         handleBack();
-        return true; // handled
+        return true;
       }
 
-      // 3. In home screen: check double back press
-      const now = Date.now();
-      if (now - lastBackPressTimeRef.current < 2000) {
-        // Double pressed within 2s -> trigger immediate full exit
-        forceExitApplication();
-        return false;
-      }
-
-      // First press: prompt user
-      lastBackPressTimeRef.current = now;
-      setShowExitPrompt(true);
-      soundService.playClick();
-      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-      exitTimerRef.current = setTimeout(() => {
-        setShowExitPrompt(false);
-      }, 2000);
-      return true; // handled, waiting for second back press
+      // 5. In home screen: open Exit App confirmation dialog
+      setShowExitAppDialog(true);
+      return true;
     };
 
     (window as any).handleAndroidBackPressed = handleBackAction;
@@ -229,7 +328,6 @@ function MainLayout() {
       if (backButtonListener && typeof backButtonListener.remove === 'function') {
         backButtonListener.remove();
       }
-      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     };
   }, [activeModal, currentScreen, screenStack]);
 
@@ -459,11 +557,140 @@ function MainLayout() {
       {/* GPS Permission Request & Diagnostic Prompt Modal */}
       <GpsPermissionPromptModal />
 
-      {/* Double back exit toast prompt */}
-      {showExitPrompt && (
-        <div className="fixed bottom-14 left-1/2 -translate-x-1/2 z-[99999] bg-slate-900/90 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-2xl backdrop-blur-xs pointer-events-none flex items-center gap-2 animate-bounce">
-          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-          <span>再按一次返回键退出程序</span>
+      {/* Engineering Survey Exit Prompt Modal */}
+      {showExitSurveyConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[99998] select-none">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
+            <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center">
+                <AlertCircle className="w-5 h-5 text-amber-500 mr-2" />
+                <h3 className="text-sm font-bold text-slate-800">工程测量工作 - 退出提示</h3>
+              </div>
+              <button
+                onClick={() => setShowExitSurveyConfirm(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 flex flex-col">
+              <p className="text-xs text-slate-700 leading-relaxed mb-3">
+                您即将退出【工程测量】工作模式。退出前建议保存并归档当前工程测量成果。
+              </p>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-4 text-xs font-mono text-slate-600">
+                <div className="flex items-center mb-1">
+                  <span className="text-slate-500 font-sans font-medium mr-1.5">当前工程名:</span>
+                  <span className="font-bold text-slate-900 font-sans">{currentProject?.name || 'project 1'}</span>
+                </div>
+                <div className="flex items-center mb-1">
+                  <span className="text-slate-500 font-sans font-medium mr-1.5">归档主目录:</span>
+                  <span className="text-[11px] text-blue-700">com.RTKproject.files/project/{currentProject?.name || 'project 1'}/</span>
+                </div>
+                <div className="flex items-center">
+                  <span className="text-slate-500 font-sans font-medium mr-1.5">待归档点位:</span>
+                  <span className="font-bold text-emerald-600 font-sans">{Array.isArray(points) ? points.length : 0} 个坐标成果</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col">
+                <button
+                  onClick={handleSaveAndExitSurvey}
+                  disabled={isSavingOnExit}
+                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center mb-2 transition disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4 mr-1.5" />
+                  <span>{isSavingOnExit ? '正在保存归档...' : '保存工程数据并退出'}</span>
+                </button>
+
+                <div className="flex">
+                  <button
+                    onClick={handleDiscardAndExitSurvey}
+                    className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer mr-2 transition"
+                  >
+                    直接退出
+                  </button>
+                  <button
+                    onClick={() => setShowExitSurveyConfirm(false)}
+                    className="flex-1 py-2 px-3 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-semibold cursor-pointer transition"
+                  >
+                    取消并留在此页
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Global App Exit Confirmation Dialog */}
+      {showExitAppDialog && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[99999] select-none">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col">
+            <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center">
+                <LogOut className="w-5 h-5 text-red-500 mr-2" />
+                <h3 className="text-sm font-bold text-slate-800">退出测绘精灵系统</h3>
+              </div>
+              <button
+                onClick={() => setShowExitAppDialog(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 flex flex-col">
+              <p className="text-xs text-slate-700 leading-relaxed mb-3">
+                您确定要退出测绘精灵应用程序吗？建议在退出前保存当前工程所有测量数据。
+              </p>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mb-4 text-xs">
+                <div className="flex items-center mb-1">
+                  <span className="text-slate-500 mr-1.5">当前工程:</span>
+                  <span className="font-bold text-slate-800">{currentProject?.name || 'project 1'}</span>
+                </div>
+                <div className="text-[11px] text-slate-500 truncate">
+                  保存至: com.RTKproject.files/project/{currentProject?.name || 'project 1'}/
+                </div>
+              </div>
+
+              <div className="flex flex-col">
+                <button
+                  onClick={handleSaveAndExitApp}
+                  disabled={isSavingOnExit}
+                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center mb-2 transition disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4 mr-1.5" />
+                  <span>{isSavingOnExit ? '正在保存归档...' : '保存工程数据并退出'}</span>
+                </button>
+
+                <div className="flex">
+                  <button
+                    onClick={handleDirectExitApp}
+                    className="flex-1 py-2 px-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-semibold cursor-pointer mr-2 transition"
+                  >
+                    直接退出程序
+                  </button>
+                  <button
+                    onClick={() => setShowExitAppDialog(false)}
+                    className="flex-1 py-2 px-3 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-semibold cursor-pointer transition"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Survey Save Toast */}
+      {exitSurveyToast && (
+        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[100000] bg-emerald-600 text-white text-xs font-bold px-4 py-2 rounded-full shadow-2xl flex items-center">
+          <CheckCircle2 className="w-4 h-4 mr-1.5 text-white" />
+          <span>{exitSurveyToast}</span>
         </div>
       )}
     </div>
