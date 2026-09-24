@@ -68,6 +68,7 @@ export interface PolarCorrectionState {
 }
 
 import { fileStorageService, StoredFileInfo } from './fileStorageService';
+import { fitEllipsoidLeastSquares } from './compassFusionService';
 
 export const MAGNETOMETER_STORAGE_FOLDER = 'magnetomater calibration data';
 const STORAGE_KEY_BASELINE = 'rtk_compass_spatial_baseline_v1';
@@ -402,14 +403,15 @@ export class SpatialMagneticService {
   }
 
   /**
-   * 空间三维球体最小二乘法拟合求解
-   * 输入采样点三维坐标，解算球心偏移 (Vx, Vy, Vz) 与半径 R
+   * 空间最小二乘法椭球拟合校准求解
+   * 输入采样点三维坐标，解算硬铁偏移 (ox, oy, oz)、各轴标度因子 (sx, sy, sz) 与环境场强半径 R
    */
   public static solveSphereFit(points: Array<[number, number, number]>): {
     center: [number, number, number];
     radius: number;
     residuals: number;
     score: number;
+    scaleFactors?: [number, number, number];
   } {
     if (points.length < 8) {
       return {
@@ -417,56 +419,19 @@ export class SpatialMagneticService {
         radius: 46.5,
         residuals: 1.0,
         score: 60,
+        scaleFactors: [1.0, 1.0, 1.0],
       };
     }
 
-    // 线性化球体方程: (x-x0)^2 + (y-y0)^2 + (z-z0)^2 = R^2
-    // => 2*x*x0 + 2*y*y0 + 2*z*z0 + (R^2 - x0^2 - y0^2 - z0^2) = x^2 + y^2 + z^2
-    let sumX = 0, sumY = 0, sumZ = 0;
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-
-    for (const [x, y, z] of points) {
-      sumX += x;
-      sumY += y;
-      sumZ += z;
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
-    }
-
-    // 采用稳定中心法
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    const cz = (minZ + maxZ) / 2;
-
-    const spanX = Math.abs(maxX - minX);
-    const spanY = Math.abs(maxY - minY);
-    const spanZ = Math.abs(maxZ - minZ);
-    const radius = Math.max(15, (spanX + spanY + spanZ) / 6);
-
-    // 计算标准残差
-    let errSum = 0;
-    for (const [x, y, z] of points) {
-      const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2);
-      errSum += Math.abs(dist - radius);
-    }
-    const meanErr = errSum / points.length;
-
-    // 评分计算 (点数越多、残差越小、覆盖率越高分数越高)
-    const countFactor = Math.min(1.0, points.length / 40);
-    const errFactor = Math.max(0, 1 - meanErr / 12);
-    const score = Math.round((0.5 * countFactor + 0.5 * errFactor) * 100);
+    // 采用高精度最小二乘椭球校准拟合算法
+    const ellipsoidResult = fitEllipsoidLeastSquares(points, 48.0);
 
     return {
-      center: [Number(cx.toFixed(2)), Number(cy.toFixed(2)), Number(cz.toFixed(2))],
-      radius: Number(radius.toFixed(2)),
-      residuals: Number(meanErr.toFixed(2)),
-      score: Math.max(50, Math.min(99, score)),
+      center: ellipsoidResult.offset,
+      radius: 48.0,
+      residuals: ellipsoidResult.residuals,
+      score: ellipsoidResult.score,
+      scaleFactors: ellipsoidResult.scale,
     };
   }
 

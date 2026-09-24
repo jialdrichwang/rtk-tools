@@ -586,7 +586,7 @@ function MainLayout() {
                 </div>
                 <div className="flex items-center mb-1">
                   <span className="text-slate-500 font-sans font-medium mr-1.5">归档主目录:</span>
-                  <span className="text-[11px] text-blue-700">com.RTKproject.files/project/{currentProject?.name || 'project 1'}/</span>
+                  <span className="text-[11px] text-blue-700">com.rtkproject.files/project/{currentProject?.name || 'project 1'}/</span>
                 </div>
                 <div className="flex items-center">
                   <span className="text-slate-500 font-sans font-medium mr-1.5">待归档点位:</span>
@@ -652,7 +652,7 @@ function MainLayout() {
                   <span className="font-bold text-slate-800">{currentProject?.name || 'project 1'}</span>
                 </div>
                 <div className="text-[11px] text-slate-500 truncate">
-                  保存至: com.RTKproject.files/project/{currentProject?.name || 'project 1'}/
+                  保存至: com.rtkproject.files/project/{currentProject?.name || 'project 1'}/
                 </div>
               </div>
 

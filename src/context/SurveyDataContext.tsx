@@ -408,16 +408,18 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     try {
       if (currentProject?.id) {
         localStorage.setItem('rtk_current_proj_id', currentProject.id);
+        const projName = currentProject.name || 'project 1';
+        fileStorageService.ensureProjectDirectories(projName).catch(() => {});
       }
     } catch (e) {
       console.warn('Safe storage write error for current_proj_id:', e);
     }
-  }, [currentProject?.id]);
+  }, [currentProject?.id, currentProject?.name]);
 
   useEffect(() => {
     try {
       localStorage.setItem('rtk_points', JSON.stringify(points));
-      // Persist current project point library in /storage/emulated/0/com.RTKproject.files/project/{projName}/points/
+      // Persist current project point library in /storage/emulated/0/com.rtkproject.files/project/{projName}/points/
       const projName = currentProject?.name || 'project 1';
       if (Array.isArray(points) && points.length > 0) {
         fileStorageService.saveProjectFile(projName, 'points', 'points.json', JSON.stringify(points, null, 2)).catch(() => {});
@@ -700,7 +702,7 @@ export const SurveyDataProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
     setTracks((prev) => [newTrack, ...prev]);
 
-    // Auto-save GPX and track data to /storage/emulated/0/com.RTKproject.files/project/<proj>/tracks/
+    // Auto-save GPX and track data to /storage/emulated/0/com.rtkproject.files/project/<proj>/tracks/
     const gpx = exportTrackToGPX(newTrack);
     fileStorageService.saveFile('track', `${newTrack.name}.gpx`, gpx, 'application/gpx+xml').catch(() => {});
     fileStorageService.saveFile('track', `${newTrack.name}.json`, JSON.stringify(newTrack, null, 2), 'application/json').catch(() => {});

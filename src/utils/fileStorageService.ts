@@ -1,6 +1,6 @@
 /**
  * RTK Survey App Native File Storage Service
- * Primary Storage Root: /storage/emulated/0/com.RTKproject.files/
+ * Primary Storage Root: /storage/emulated/0/com.rtkproject.files/
  * Fixed Top-level Folders:
  *  1. magnetometer calibration data
  *  2. mapdata
@@ -49,7 +49,7 @@ export interface StoredFileInfo {
   contentSnippet?: string;
 }
 
-const DEFAULT_ROOT_DIR = '/storage/emulated/0/com.RTKproject.files';
+const DEFAULT_ROOT_DIR = '/storage/emulated/0/com.rtkproject.files';
 const STORAGE_ROOT_KEY = 'rtk_custom_storage_root';
 
 // 3 Primary Mandatory Directories
@@ -57,6 +57,10 @@ const PRIMARY_TOP_FOLDERS = [
   'magnetometer calibration data',
   'mapdata',
   'project',
+  'point',
+  'track',
+  'points',
+  'tracks',
 ];
 
 // Engineering Surveying Subcategories under project/<projectName>/Engineering Surveying/
@@ -141,8 +145,8 @@ class FileStorageService {
   }
 
   /**
-   * Initializes root directory and the 3 primary subdirectories:
-   * /storage/emulated/0/com.RTKproject.files/
+   * Initializes root directory and the primary subdirectories:
+   * /storage/emulated/0/com.rtkproject.files/
    *  ├── magnetometer calibration data/
    *  ├── mapdata/
    *  └── project/
@@ -150,27 +154,42 @@ class FileStorageService {
    */
   public async initDirectories(): Promise<boolean> {
     try {
-      if (this.isCapacitorNative) {
-        // Ensure root folder exists
-        try {
-          await Filesystem.mkdir({
-            path: 'com.RTKproject.files',
-            directory: Directory.ExternalStorage,
-            recursive: true,
-          });
-        } catch (e) {
-          // ignore if already exists
+      // 1. If AndroidBridge is available (native Android environment), invoke native mkdirs immediately
+      // This is 100% reliable across all Android versions including Android 7.0 (Nougat, API 24/25)
+      try {
+        if (typeof (window as any).AndroidBridge !== 'undefined' && typeof (window as any).AndroidBridge.ensureAppDirectories === 'function') {
+          (window as any).AndroidBridge.ensureAppDirectories('project 1');
         }
+      } catch (bridgeErr) {
+        console.warn('AndroidBridge ensureAppDirectories failed or not ready:', bridgeErr);
+      }
 
-        for (const sub of PRIMARY_TOP_FOLDERS) {
+      if (this.isCapacitorNative) {
+        // Ensure root folder exists in both lowercase and original casing
+        for (const rootName of ['com.rtkproject.files', 'com.RTKproject.files']) {
           try {
             await Filesystem.mkdir({
-              path: `com.RTKproject.files/${sub}`,
+              path: rootName,
               directory: Directory.ExternalStorage,
               recursive: true,
             });
-          } catch (err) {
-            // directory may already exist
+          } catch (e) {
+            // ignore if already exists
+          }
+        }
+
+        // Create top folders level by level
+        for (const rootName of ['com.rtkproject.files', 'com.RTKproject.files']) {
+          for (const sub of PRIMARY_TOP_FOLDERS) {
+            try {
+              await Filesystem.mkdir({
+                path: `${rootName}/${sub}`,
+                directory: Directory.ExternalStorage,
+                recursive: true,
+              });
+            } catch (err) {
+              // directory may already exist
+            }
           }
         }
       }
@@ -185,6 +204,37 @@ class FileStorageService {
   }
 
   /**
+   * Helper to ensure path exists step-by-step from root down to deepest leaf folder
+   * Fixes Android 7.0 recursive mkdir failures where intermediate directories cause early abort
+   */
+  private async mkdirHierarchical(baseRoot: string, relativePath: string): Promise<void> {
+    const parts = relativePath.split('/').filter(Boolean);
+    let currentPath = baseRoot;
+    for (const part of parts) {
+      currentPath = `${currentPath}/${part}`;
+      try {
+        await Filesystem.mkdir({
+          path: currentPath,
+          directory: Directory.ExternalStorage,
+          recursive: false,
+        });
+      } catch (err: any) {
+        // In Android, if dir already exists it may throw code: "OS_DIR_EXISTS" or message: "Directory already exists"
+        // Also try recursive: true if non-recursive fails
+        try {
+          await Filesystem.mkdir({
+            path: currentPath,
+            directory: Directory.ExternalStorage,
+            recursive: true,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  /**
    * Ensures a project's full directory tree exists:
    * project/<projectName>/
    *   ├── points/
@@ -195,35 +245,52 @@ class FileStorageService {
    *        ├── Point layout results/
    *        ├── Isometric setting-out results/
    *        ├── Linear setting-out results/
-   *        ├── Area measurement result/
-   *        ├── Length measurement result/
-   *        └── Slope measurement results/
+   *        ├── area measurement/
+   *        ├── distance measurement/
+   *        └── slope measurement/
    */
   public async ensureProjectDirectories(projectName: string = 'project 1'): Promise<void> {
     const cleanProj = projectName.trim() || 'project 1';
+
+    // 1. If native AndroidBridge is available, trigger native Java File.mkdirs() directly
+    try {
+      if (typeof (window as any).AndroidBridge !== 'undefined' && typeof (window as any).AndroidBridge.ensureAppDirectories === 'function') {
+        (window as any).AndroidBridge.ensureAppDirectories(cleanProj);
+      }
+    } catch (bridgeErr) {
+      console.warn('AndroidBridge ensureAppDirectories failed or not ready:', bridgeErr);
+    }
+
     const subPaths = [
+      `project/${cleanProj}`,
       `project/${cleanProj}/points`,
       `project/${cleanProj}/tracks`,
+      `project/${cleanProj}/Engineering Surveying`,
       `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.POINT_COLLECTION}`,
       `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.DETAIL_SURVEYING}`,
-      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.POINT_STAKEOUT}`,
-      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.ISOMETRIC_STAKEOUT}`,
-      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.LINEAR_STAKEOUT}`,
-      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.AREA_MEASURE}`,
-      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.LENGTH_MEASURE}`,
-      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.SLOPE_MEASURE}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.POINT_LAYOUT_RESULTS}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.ISOMETRIC_SETTING_OUT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.LINEAR_SETTING_OUT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.AREA_MEASUREMENT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.DISTANCE_MEASUREMENT}`,
+      `project/${cleanProj}/${ENGINEERING_SURVEY_SUBPATHS.SLOPE_MEASUREMENT}`,
+      // Also ensure exact capitalized and backward-compatible paths are present
+      `project/${cleanProj}/Engineering Surveying/Point layout results`,
+      `project/${cleanProj}/Engineering Surveying/Isometric setting-out results`,
+      `project/${cleanProj}/Engineering Surveying/Linear setting-out results`,
+      `project/${cleanProj}/Engineering Surveying/Area measurement result`,
+      `project/${cleanProj}/Engineering Surveying/Length measurement result`,
+      `project/${cleanProj}/Engineering Surveying/Slope measurement results`,
     ];
 
     if (this.isCapacitorNative) {
-      for (const p of subPaths) {
-        try {
-          await Filesystem.mkdir({
-            path: `com.RTKproject.files/${p}`,
-            directory: Directory.ExternalStorage,
-            recursive: true,
-          });
-        } catch {
-          // ignore
+      for (const rootName of ['com.rtkproject.files', 'com.RTKproject.files']) {
+        for (const p of subPaths) {
+          try {
+            await this.mkdirHierarchical(rootName, p);
+          } catch {
+            // ignore
+          }
         }
       }
     }
@@ -246,13 +313,19 @@ class FileStorageService {
 
     try {
       if (this.isCapacitorNative) {
-        await Filesystem.writeFile({
-          path: `com.RTKproject.files/${relPath}`,
-          data: stringContent,
-          directory: Directory.ExternalStorage,
-          encoding: Encoding.UTF8,
-          recursive: true,
-        });
+        for (const rootName of ['com.rtkproject.files', 'com.RTKproject.files']) {
+          try {
+            await Filesystem.writeFile({
+              path: `${rootName}/${relPath}`,
+              data: stringContent,
+              directory: Directory.ExternalStorage,
+              encoding: Encoding.UTF8,
+              recursive: true,
+            });
+          } catch {
+            // ignore individual root failure
+          }
+        }
       }
       this.saveToVirtualStorage(`proj_${cleanProj}_${subCategoryPath}`, filename, stringContent);
       return { success: true, path: fullPath };
@@ -276,13 +349,19 @@ class FileStorageService {
 
     try {
       if (this.isCapacitorNative) {
-        const res = await Filesystem.readFile({
-          path: `com.RTKproject.files/${relPath}`,
-          directory: Directory.ExternalStorage,
-          encoding: Encoding.UTF8,
-        });
-        if (res && res.data) {
-          return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+        for (const rootName of ['com.rtkproject.files', 'com.RTKproject.files']) {
+          try {
+            const res = await Filesystem.readFile({
+              path: `${rootName}/${relPath}`,
+              directory: Directory.ExternalStorage,
+              encoding: Encoding.UTF8,
+            });
+            if (res && res.data) {
+              return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+            }
+          } catch {
+            // try next
+          }
         }
       }
     } catch {
@@ -316,27 +395,29 @@ class FileStorageService {
     }
 
     if (this.isCapacitorNative) {
-      try {
-        const nativeList = await Filesystem.readdir({
-          path: `com.RTKproject.files/${relPath}`,
-          directory: Directory.ExternalStorage,
-        });
-        if (nativeList && nativeList.files) {
-          nativeList.files.forEach((file) => {
-            const fileName = typeof file === 'string' ? file : file.name;
-            if (!list.some((it) => it.name === fileName)) {
-              list.push({
-                name: fileName,
-                folder: relPath,
-                path: `${this.currentRootDir}/${relPath}/${fileName}`,
-                size: typeof file === 'object' ? file.size : undefined,
-                mtime: typeof file === 'object' ? file.mtime : undefined,
-              });
-            }
+      for (const rootName of ['com.rtkproject.files', 'com.RTKproject.files']) {
+        try {
+          const nativeList = await Filesystem.readdir({
+            path: `${rootName}/${relPath}`,
+            directory: Directory.ExternalStorage,
           });
+          if (nativeList && nativeList.files) {
+            nativeList.files.forEach((file) => {
+              const fileName = typeof file === 'string' ? file : file.name;
+              if (!list.some((it) => it.name === fileName)) {
+                list.push({
+                  name: fileName,
+                  folder: relPath,
+                  path: `${this.currentRootDir}/${relPath}/${fileName}`,
+                  size: typeof file === 'object' ? file.size : undefined,
+                  mtime: typeof file === 'object' ? file.mtime : undefined,
+                });
+              }
+            });
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
     }
 

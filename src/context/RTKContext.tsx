@@ -1140,6 +1140,23 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         satsUsed: 30,
         realGpsMessage: `已直连外置RTK接收机 [${deviceInfo.brand} ${deviceInfo.model}]，接收差分 NMEA 数据流`,
       }));
+
+      // If running inside Android APK shell with native SPP bridge, notify native layer
+      if (typeof window !== 'undefined' && (window as any).AndroidBridge) {
+        try {
+          const bridge = (window as any).AndroidBridge;
+          if (typeof bridge.connectBluetoothDevice === 'function') {
+            bridge.connectBluetoothDevice(deviceInfo.mac);
+          } else if (typeof bridge.connectSppClient === 'function') {
+            bridge.connectSppClient(deviceInfo.mac, '00001101-0000-1000-8000-00805F9B34FB');
+          } else if (typeof bridge.startBluetoothSpp === 'function') {
+            bridge.startBluetoothSpp(deviceInfo.mac);
+          }
+        } catch (e) {
+          console.warn('AndroidBridge connectBluetoothDevice invocation error:', e);
+        }
+      }
+
       setShowBluetoothModal(false);
       return true;
     }
@@ -1189,6 +1206,18 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const disconnectBluetoothGNSS = useCallback(() => {
     soundService.playClick();
+    if (typeof window !== 'undefined' && (window as any).AndroidBridge) {
+      try {
+        const bridge = (window as any).AndroidBridge;
+        if (typeof bridge.disconnectBluetooth === 'function') {
+          bridge.disconnectBluetooth();
+        } else if (typeof bridge.stopBluetoothSpp === 'function') {
+          bridge.stopBluetoothSpp();
+        }
+      } catch (e) {
+        console.warn('AndroidBridge disconnectBluetooth error:', e);
+      }
+    }
     setRtkState((prev) => ({
       ...prev,
       bluetoothDeviceName: undefined,

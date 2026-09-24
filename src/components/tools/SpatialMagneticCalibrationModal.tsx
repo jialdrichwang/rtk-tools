@@ -322,6 +322,7 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
     soundService.playClick();
     const center = fitResult ? fitResult.center : [4.2, -6.8, 3.1];
     const score = fitResult ? fitResult.score : 92;
+    const scales = fitResult?.scaleFactors ? fitResult.scaleFactors : [1.0, 1.0, 1.0];
 
     const data: SpatialCalibrationData = {
       version: 1,
@@ -332,7 +333,7 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
         lon: currentLon,
       },
       phoneHardIron: [center[0], center[1], center[2]],
-      scaleFactors: [1.02, 0.98, 1.0],
+      scaleFactors: [scales[0], scales[1], scales[2]],
       earthFieldMagnitude: fitResult ? fitResult.radius : 46.8,
       physicalCompassOffset: calculatedOffset,
       physicalReferenceHeading: physicalRefHeading,
