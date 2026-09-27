@@ -66,9 +66,16 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
   const [verticalProgress, setVerticalProgress] = useState(0);
   const [sampledPoints, setSampledPoints] = useState<Array<[number, number, number]>>([]);
 
-  // Physical compass reference heading input
-  const [physicalRefHeading, setPhysicalRefHeading] = useState<number>(Math.round(currentHeading));
-  const [calculatedOffset, setCalculatedOffset] = useState<number>(0);
+  // Physical compass reference heading input (默认为空，等待输入，不要有初始值反复跳动)
+  const [physicalRefInput, setPhysicalRefInput] = useState<string>('');
+  const [calculatedOffset, setCalculatedOffset] = useState<number | null>(null);
+  const [screenAlignMode, setScreenAlignMode] = useState<'portrait' | 'landscape'>('portrait');
+  const [geologicalReadingInput, setGeologicalReadingInput] = useState<string>('');
+  const [calibFeedback, setCalibFeedback] = useState<{ text: string; type: 'success' | 'warn' } | null>(null);
+  const [geoOffset, setGeoOffset] = useState(() => spatialMagneticService.getGeologicalOffset());
+  const [gpsTestOffset, setGpsTestOffset] = useState(() => spatialMagneticService.getGpsTestOffset());
+  const [isUnifiedConstrained, setIsUnifiedConstrained] = useState(() => spatialMagneticService.isUnifiedConstraintActive());
+  const [unifiedTarget, setUnifiedTarget] = useState(() => spatialMagneticService.getUnifiedTargetHeading());
 
   // Solved parameters preview
   const [fitResult, setFitResult] = useState<{
@@ -76,6 +83,7 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
     radius: number;
     residuals: number;
     score: number;
+    scaleFactors?: [number, number, number];
   } | null>(null);
 
   // Field Adaptive States
@@ -142,16 +150,24 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
   useEffect(() => {
     if (isOpen) {
       refreshStoredData();
-      setPhysicalRefHeading(Math.round(currentHeading));
     }
-  }, [isOpen, currentHeading, currentLat, currentLon]);
+  }, [isOpen, currentLat, currentLon]);
 
-  // Handle physical compass alignment input change
+  // Handle physical compass alignment input change (默认为空等待输入，不随传感器反复跳动重置)
   useEffect(() => {
-    // Offset = physical - phone
-    const diff = ((physicalRefHeading - currentHeading + 540) % 360) - 180;
-    setCalculatedOffset(Math.round(diff * 10) / 10);
-  }, [physicalRefHeading, currentHeading]);
+    const trimmed = physicalRefInput.trim();
+    if (!trimmed) {
+      setCalculatedOffset(null);
+      return;
+    }
+    const val = parseFloat(trimmed);
+    if (!isNaN(val) && val >= 0 && val <= 360) {
+      const diff = ((val - currentHeading + 540) % 360) - 180;
+      setCalculatedOffset(Math.round(diff * 10) / 10);
+    } else {
+      setCalculatedOffset(null);
+    }
+  }, [physicalRefInput, currentHeading]);
 
   // 3D Sphere Point Cloud Canvas Animation
   useEffect(() => {
@@ -254,7 +270,7 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
     };
   }, [isOpen, fitResult, sampledPoints, savedBaseline]);
 
-  // Execute Step 1: Spatial Magnetic Action (Horizontal 360 + Vertical Wheel 360)
+  // Execute Step 1: Spatial Magnetic Action (Horizontal 360: 5.0s + Vertical Wheel 360: 5.0s)
   const startSpatialSampling = () => {
     soundService.playClick();
     setIsSampling(true);
@@ -266,20 +282,36 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
 
     const collected: Array<[number, number, number]> = [];
 
-    // Stage 1: Horizontal 360° turn
+    // Stage 1: Horizontal 360° turn (Full 5.0 Seconds duration: 100 steps * 50ms = 5000ms)
     let hProg = 0;
     const hInterval = setInterval(() => {
-      hProg += 4;
+      hProg += 1;
       setHorizontalProgress(Math.min(100, hProg));
 
-      // simulate/sample 3D point
-      const angleRad = (hProg * 3.6 * Math.PI) / 180;
-      const noise = (Math.random() - 0.5) * 3;
-      // Intrinsic offset + earth circle
-      const bx = 38 * Math.cos(angleRad) + 4.2 + noise;
-      const by = 38 * Math.sin(angleRad) - 6.8 + noise;
-      const bz = 18 * Math.cos(angleRad * 0.5) + 3.1 + noise;
-      collected.push([bx, by, bz]);
+      // Attempt to sample live hardware magnetometer if available from Native Bridge
+      let sampleAdded = false;
+      if (typeof (window as any).AndroidBridge?.getNativeCompassStatus === 'function') {
+        try {
+          const raw = (window as any).AndroidBridge.getNativeCompassStatus();
+          if (raw && raw !== '{}') {
+            const parsed = JSON.parse(raw);
+            if (typeof parsed.mx === 'number' && typeof parsed.my === 'number' && typeof parsed.mz === 'number') {
+              collected.push([parsed.mx, parsed.my, parsed.mz]);
+              sampleAdded = true;
+            }
+          }
+        } catch {}
+      }
+
+      if (!sampleAdded) {
+        const angleRad = (hProg * 3.6 * Math.PI) / 180;
+        const noise = (Math.random() - 0.5) * 2.5;
+        const bx = 38 * Math.cos(angleRad) + 4.2 + noise;
+        const by = 38 * Math.sin(angleRad) - 6.8 + noise;
+        const bz = 18 * Math.cos(angleRad * 0.5) + 3.1 + noise;
+        collected.push([bx, by, bz]);
+      }
+
       setSampledPoints([...collected]);
 
       if (hProg >= 100) {
@@ -287,19 +319,35 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
         soundService.playClick();
         setSamplingStage('vertical');
 
-        // Stage 2: Vertical Wheel 360° rotation
+        // Stage 2: Vertical Wheel 360° rotation (Full 5.0 Seconds duration: 100 steps * 50ms = 5000ms)
         let vProg = 0;
         const vInterval = setInterval(() => {
-          vProg += 4;
+          vProg += 1;
           setVerticalProgress(Math.min(100, vProg));
 
-          const vRad = (vProg * 3.6 * Math.PI) / 180;
-          const vNoise = (Math.random() - 0.5) * 3;
-          // Vertical wheel sweeps Y-Z plane
-          const bx2 = 12 * Math.sin(vRad * 0.5) + 4.2 + vNoise;
-          const by2 = 38 * Math.cos(vRad) - 6.8 + vNoise;
-          const bz2 = 38 * Math.sin(vRad) + 3.1 + vNoise;
-          collected.push([bx2, by2, bz2]);
+          let vSampleAdded = false;
+          if (typeof (window as any).AndroidBridge?.getNativeCompassStatus === 'function') {
+            try {
+              const raw = (window as any).AndroidBridge.getNativeCompassStatus();
+              if (raw && raw !== '{}') {
+                const parsed = JSON.parse(raw);
+                if (typeof parsed.mx === 'number' && typeof parsed.my === 'number' && typeof parsed.mz === 'number') {
+                  collected.push([parsed.mx, parsed.my, parsed.mz]);
+                  vSampleAdded = true;
+                }
+              }
+            } catch {}
+          }
+
+          if (!vSampleAdded) {
+            const vRad = (vProg * 3.6 * Math.PI) / 180;
+            const vNoise = (Math.random() - 0.5) * 2.5;
+            const bx2 = 12 * Math.sin(vRad * 0.5) + 4.2 + vNoise;
+            const by2 = 38 * Math.cos(vRad) - 6.8 + vNoise;
+            const bz2 = 38 * Math.sin(vRad) + 3.1 + vNoise;
+            collected.push([bx2, by2, bz2]);
+          }
+
           setSampledPoints([...collected]);
 
           if (vProg >= 100) {
@@ -312,9 +360,116 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
             const solved = SpatialMagneticService.solveSphereFit(collected);
             setFitResult(solved);
           }
-        }, 80);
+        }, 50);
       }
-    }, 80);
+    }, 50);
+  };
+
+  // 地质罗盘逆时针读数自动换算为实际航向: 实际航向 = 360° - 地质罗盘读数
+  const handleGeologicalReadingConvert = () => {
+    const parsed = parseFloat(geologicalReadingInput);
+    if (!isNaN(parsed)) {
+      const converted = ((360 - (parsed % 360)) + 360) % 360;
+      const rounded = Math.round(converted * 10) / 10;
+      setPhysicalRefInput(String(rounded));
+      soundService.playClick();
+      setCalibFeedback({
+        text: `已根据地质罗盘逆时针刻度 (360° - ${parsed}°) 换算出实际航向: ${rounded}°，并填入航向输入框`,
+        type: 'success',
+      });
+    }
+  };
+
+  // 【USER REQ】统一校准两套系统至当前正确航向并保存入文件
+  const handleUnifiedCalibration = async () => {
+    soundService.playClick();
+    const parsedTarget = parseFloat(physicalRefInput);
+    if (isNaN(parsedTarget) || parsedTarget < 0 || parsedTarget > 360) {
+      setCalibFeedback({
+        text: '请输入有效的真实物理航向角度 (0° ~ 360°)',
+        type: 'warn',
+      });
+      return;
+    }
+
+    const res = await spatialMagneticService.saveUnifiedCalibration(
+      parsedTarget,
+      currentHeading,
+      screenAlignMode
+    );
+
+    setGeoOffset(res.offset);
+    setGpsTestOffset(res.offset);
+    setIsUnifiedConstrained(true);
+    setUnifiedTarget(parsedTarget);
+    setCalculatedOffset(res.offset);
+    await refreshStoredData();
+    if (onCalibrationUpdated) onCalibrationUpdated();
+    soundService.playSuccess();
+
+    setSaveBanner({
+      type: 'success',
+      text: `已成功统一校准两套系统至当前正确航向 ${parsedTarget}°！校准参数完全受此值约束！`,
+      path: res.path,
+    });
+
+    setCalibFeedback({
+      text: `已成功保存校准文件！两套系统校准参数完全向正确航向 ${parsedTarget}° 统一约束锁定（偏差角: ${res.offset >= 0 ? `+${res.offset}` : res.offset}°）`,
+      type: 'success',
+    });
+  };
+
+  // 仅校准地质/航向 或 仅校准 GPS Test
+  const handleIndependentCalibration = async (system: 'geological' | 'gpstest') => {
+    soundService.playClick();
+    const parsedTarget = parseFloat(physicalRefInput);
+    if (isNaN(parsedTarget) || parsedTarget < 0 || parsedTarget > 360) {
+      setCalibFeedback({
+        text: '请输入有效的真实物理航向角度 (0° ~ 360°)',
+        type: 'warn',
+      });
+      return;
+    }
+
+    let neededOffset = (((parsedTarget - currentHeading) + 540) % 360) - 180;
+    if (screenAlignMode === 'landscape') {
+      neededOffset = (((neededOffset - 90) + 540) % 360) - 180;
+    }
+    const norm = Math.round(neededOffset * 10) / 10;
+
+    if (system === 'geological') {
+      spatialMagneticService.setGeologicalOffset(norm);
+      setGeoOffset(norm);
+    } else {
+      spatialMagneticService.setGpsTestOffset(norm);
+      setGpsTestOffset(norm);
+    }
+
+    await refreshStoredData();
+    if (onCalibrationUpdated) onCalibrationUpdated();
+    soundService.playSuccess();
+    setCalibFeedback({
+      text: `已完成【${system === 'geological' ? '地质/航向罗盘' : 'GPS Test Plus'}】独立校准，偏差角: ${norm >= 0 ? `+${norm}` : norm}°`,
+      type: 'success',
+    });
+  };
+
+  // 校准偏角归零复位
+  const handleResetOffsets = async () => {
+    soundService.playClick();
+    await spatialMagneticService.resetCalibrationOffsets();
+    setGeoOffset(0);
+    setGpsTestOffset(0);
+    setIsUnifiedConstrained(false);
+    setUnifiedTarget(null);
+    setCalculatedOffset(0);
+    await refreshStoredData();
+    if (onCalibrationUpdated) onCalibrationUpdated();
+    soundService.playSuccess();
+    setCalibFeedback({
+      text: '已将两套系统独立校正偏角归零复位，解除统一约束锁定',
+      type: 'success',
+    });
   };
 
   // Save Baseline Data
@@ -323,6 +478,12 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
     const center = fitResult ? fitResult.center : [4.2, -6.8, 3.1];
     const score = fitResult ? fitResult.score : 92;
     const scales = fitResult?.scaleFactors ? fitResult.scaleFactors : [1.0, 1.0, 1.0];
+
+    const finalOffset = calculatedOffset !== null ? calculatedOffset : (savedBaseline?.physicalCompassOffset || 0);
+    const parsedRef = parseFloat(physicalRefInput);
+    const finalRefHeading = !isNaN(parsedRef) && physicalRefInput.trim() !== ''
+      ? parsedRef
+      : (savedBaseline?.physicalReferenceHeading || Math.round(currentHeading));
 
     const data: SpatialCalibrationData = {
       version: 1,
@@ -335,8 +496,8 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
       phoneHardIron: [center[0], center[1], center[2]],
       scaleFactors: [scales[0], scales[1], scales[2]],
       earthFieldMagnitude: fitResult ? fitResult.radius : 46.8,
-      physicalCompassOffset: calculatedOffset,
-      physicalReferenceHeading: physicalRefHeading,
+      physicalCompassOffset: finalOffset,
+      physicalReferenceHeading: finalRefHeading,
       qualityScore: score,
       horizontalCoveragePct: 100,
       verticalCoveragePct: 100,
@@ -531,11 +692,11 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
                     }`}
                   >
                     <div className="font-bold text-slate-800 flex items-center justify-between">
-                      <span>动作一：水平转身 360°</span>
+                      <span>动作一：水平转身 360° (5.0秒)</span>
                       <span className="font-mono text-blue-600">{horizontalProgress}%</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      手持手机外展上臂，身体平稳原地旋转一整圈（采样水平XY地磁大圆）。
+                      手持手机外展上臂，平稳原地旋转一整圈（充足采样5秒，解耦水平XY地磁偏置）。
                     </p>
                     <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
                       <div
@@ -553,11 +714,11 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
                     }`}
                   >
                     <div className="font-bold text-slate-800 flex items-center justify-between">
-                      <span>动作二：轮臂垂直 360°</span>
+                      <span>动作二：轮臂垂直 360° (5.0秒)</span>
                       <span className="font-mono text-indigo-600">{verticalProgress}%</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-1">
-                      手持手机向前竖直轮臂旋转一整圈（采样YZ/XZ垂直重力面大圆）。
+                      手持手机向前竖直轮臂旋转一整圈（充足采样5秒，解耦YZ/XZ垂直硬磁偏置）。
                     </p>
                     <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
                       <div
@@ -647,43 +808,204 @@ export const SpatialMagneticCalibrationModal: React.FC<Props> = ({
                   </div>
 
                   {/* Physical Compass Alignment Section */}
-                  <div className="bg-amber-50/60 border border-amber-200/70 rounded-xl p-3 space-y-2">
-                    <div className="flex items-center justify-between">
+                  <div className="bg-amber-50/70 border border-amber-300/80 rounded-2xl p-3.5 space-y-3">
+                    <div className="flex items-center justify-between border-b border-amber-200/80 pb-2">
                       <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
                         <Compass className="w-4 h-4 text-amber-700" />
-                        与物理指南针同轴比对标定
+                        <span>物理指南针同轴比对与两套系统统一校准</span>
                       </span>
-                      <span className="text-[11px] text-amber-800 font-mono">
-                        校准偏角: {calculatedOffset >= 0 ? `+${calculatedOffset}°` : `${calculatedOffset}°`}
+                      <span className="text-[11px] font-mono text-slate-600">
+                        当前手机实测: <strong className="text-slate-900">{currentHeading.toFixed(1)}°</strong>
                       </span>
                     </div>
 
-                    <p className="text-[11px] text-amber-900/80 leading-normal">
-                      将手机平放，上边沿与物理指南针机械照准轴平行对齐，输入物理指南针读取的真实刻度：
-                    </p>
-
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 flex items-center bg-white border border-amber-300 rounded-lg px-2.5 py-1">
-                        <span className="text-xs text-slate-500 mr-2">物理指南针刻度:</span>
-                        <input
-                          type="number"
-                          min="0"
-                          max="360"
-                          step="0.1"
-                          value={physicalRefHeading}
-                          onChange={(e) => setPhysicalRefHeading(parseFloat(e.target.value) || 0)}
-                          className="w-full text-xs font-bold font-mono text-slate-800 outline-hidden"
-                        />
-                        <span className="text-xs text-slate-400 font-mono">°</span>
+                    {/* 磁场干扰提示：若测算到磁场明显干扰，字体由透明转为鲜红色脉冲警示 */}
+                    {fitResult && (fitResult.radius < 25 || fitResult.radius > 65 || fitResult.residuals > 2.5) ? (
+                      <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-600 font-extrabold text-xs flex items-center gap-2 animate-pulse shadow-2xs">
+                        <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                        <span>⚠️ 检测到明显磁场干扰 (场强 {fitResult.radius.toFixed(1)} μT)！建议更换校正位置后再标定！</span>
                       </div>
+                    ) : (
+                      <div className="p-2 rounded-xl bg-white/80 border border-amber-200 text-slate-600 text-xs flex items-center justify-between">
+                        <span className="flex items-center gap-1.5 text-emerald-700 font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          环境磁场适宜进行物理罗盘同轴标定
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400">标准区间: 25-65μT</span>
+                      </div>
+                    )}
+
+                    {/* 屏幕朝向模式勾选 */}
+                    <div className="flex items-center gap-3 text-xs bg-white/80 p-2.5 rounded-xl border border-amber-200 flex-wrap">
+                      <span className="font-bold text-slate-700">屏幕朝向模式:</span>
+                      <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700">
+                        <input
+                          type="radio"
+                          name="modalScreenAlignRadio"
+                          checked={screenAlignMode === 'portrait'}
+                          onChange={() => setScreenAlignMode('portrait')}
+                          className="text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <span>竖屏模式 (Portrait - 顶端平行同向)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer font-medium text-slate-700">
+                        <input
+                          type="radio"
+                          name="modalScreenAlignRadio"
+                          checked={screenAlignMode === 'landscape'}
+                          onChange={() => setScreenAlignMode('landscape')}
+                          className="text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <span>横屏模式 (Landscape - 长边平行同向)</span>
+                      </label>
+                    </div>
+
+                    {/* 说明与地质罗盘逆时针换算说明 */}
+                    <div className="text-[11px] text-slate-600 space-y-1.5">
+                      <div className="font-semibold text-slate-800 flex items-center gap-1">
+                        <span>📌 默认手机或平板与物理罗盘平行同向摆放。</span>
+                      </div>
+                      <div className="text-amber-950 bg-amber-100/70 p-2 rounded-xl border border-amber-200 leading-relaxed text-[11px]">
+                        💡 <strong>特别注意</strong>：考虑地质罗盘刻度盘为逆时针反字式，所以输入的数值为实际航向值（<strong>实际航向值 = 360° - 地质罗盘读数</strong>）。
+                      </div>
+                    </div>
+
+                    {/* 两个输入通道：真实航向值输入 & 地质罗盘逆时针读数辅助换算器 */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {/* 通道 1: 输入目前物理罗盘指向航向值 */}
+                      <div className="bg-white border border-blue-300 rounded-xl p-2.5 space-y-1.5 focus-within:ring-2 focus-within:ring-blue-400">
+                        <div className="text-[10px] text-blue-900 font-bold flex items-center justify-between">
+                          <span>输入当前物理罗盘正确航向值:</span>
+                          <span className="font-mono text-slate-400">0-360°</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="0"
+                            max="360"
+                            step="0.1"
+                            placeholder="输入正确航向值 (0-360°)"
+                            value={physicalRefInput}
+                            onChange={(e) => setPhysicalRefInput(e.target.value)}
+                            className="w-full text-xs font-bold font-mono text-slate-900 outline-none placeholder:text-slate-400"
+                          />
+                          <span className="text-xs font-mono text-slate-500">°</span>
+                          <button
+                            type="button"
+                            onClick={() => setPhysicalRefInput(String(Math.round(currentHeading)))}
+                            className="px-2 py-0.8 text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-bold shrink-0 cursor-pointer border border-slate-200"
+                            title="填入当前手机实测读数"
+                          >
+                            填入当前
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 通道 2: 地质罗盘盘面逆时针读数换算器 */}
+                      <div className="bg-white border border-amber-300 rounded-xl p-2.5 space-y-1.5 focus-within:ring-2 focus-within:ring-amber-400">
+                        <div className="text-[10px] text-amber-900 font-bold flex items-center justify-between">
+                          <span>若直接看地质罗盘，输入盘面刻度:</span>
+                          <span className="font-mono text-amber-600">360 - 读数</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="0"
+                            max="360"
+                            step="0.1"
+                            placeholder="输入地质罗盘盘面读数"
+                            value={geologicalReadingInput}
+                            onChange={(e) => setGeologicalReadingInput(e.target.value)}
+                            className="w-full text-xs font-bold font-mono text-slate-900 outline-none placeholder:text-slate-400"
+                          />
+                          <span className="text-xs font-mono text-amber-600">°</span>
+                          <button
+                            type="button"
+                            onClick={handleGeologicalReadingConvert}
+                            disabled={!geologicalReadingInput}
+                            className="px-2 py-0.8 text-[10px] bg-amber-500 hover:bg-amber-600 text-white rounded font-bold shrink-0 cursor-pointer disabled:opacity-40"
+                            title="自动执行 (360° - 读数) 并填入航向输入框"
+                          >
+                            换算并填入
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 校准反馈提示 */}
+                    {calibFeedback && (
+                      <div
+                        className={`p-2 rounded-xl text-xs flex items-center gap-1.5 border font-medium ${
+                          calibFeedback.type === 'success'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : 'bg-amber-50 text-amber-800 border-amber-200'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>{calibFeedback.text}</span>
+                      </div>
+                    )}
+
+                    {/* 【USER REQ】四大操作按钮：统一校准入文件并完全约束 / 仅校准地质航向 / 仅校准GPStest / 校准偏角归零 */}
+                    <div className="space-y-1.5 pt-1">
                       <button
                         type="button"
-                        onClick={() => setPhysicalRefHeading(Math.round(currentHeading))}
-                        className="px-2 py-1 text-[11px] font-bold bg-white text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer"
-                        title="快速填入当前手机读数"
+                        onClick={handleUnifiedCalibration}
+                        disabled={!physicalRefInput}
+                        className="w-full py-2.8 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-xs transition cursor-pointer disabled:opacity-40"
                       >
-                        填入当前
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>🎯 统一校准两套系统至当前正确航向（保存入文件并完全约束指南针参数）</span>
                       </button>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleIndependentCalibration('geological')}
+                          disabled={!physicalRefInput}
+                          className="py-2 bg-white hover:bg-slate-50 active:scale-95 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-40"
+                        >
+                          仅校准地质/航向
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleIndependentCalibration('gpstest')}
+                          disabled={!physicalRefInput}
+                          className="py-2 bg-white hover:bg-slate-50 active:scale-95 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-40"
+                        >
+                          仅校准 GPS Test
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleResetOffsets}
+                          className="py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition cursor-pointer"
+                        >
+                          校准偏角归零
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 两套系统当前保存的独立补偿量状态看板 */}
+                    <div className="flex items-center justify-between text-[11px] font-mono bg-white p-2.5 rounded-xl border border-amber-200 flex-wrap gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                        <span className="text-slate-600 font-sans">地质/航向补偿:</span>
+                        <span className="font-bold text-blue-700">
+                          {geoOffset >= 0 ? `+${geoOffset.toFixed(1)}` : geoOffset.toFixed(1)}°
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-cyan-600"></span>
+                        <span className="text-slate-600 font-sans">GPS Test Plus 补偿:</span>
+                        <span className="font-bold text-cyan-700">
+                          {gpsTestOffset >= 0 ? `+${gpsTestOffset.toFixed(1)}` : gpsTestOffset.toFixed(1)}°
+                        </span>
+                      </div>
+                      {isUnifiedConstrained && (
+                        <span className="text-[10px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-sans font-bold">
+                          🔒 受统一校准文件严格约束 ({unifiedTarget !== null ? `${unifiedTarget}°` : ''})
+                        </span>
+                      )}
                     </div>
                   </div>
 

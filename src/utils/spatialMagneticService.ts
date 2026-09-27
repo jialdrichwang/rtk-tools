@@ -26,6 +26,9 @@ export interface SpatialCalibrationData {
   earthFieldMagnitude: number;
   // 与物理指南针比对的校准偏差角 (度)
   physicalCompassOffset: number;
+  // 独立系统校准偏差量 (两套系统独立校正)
+  geologicalOffset?: number; // 地质与航向罗盘独立偏差角 (度)
+  gpsTestOffset?: number;    // GPS Test Plus 罗盘独立偏差角 (度)
   // 物理指南针基准读数
   physicalReferenceHeading: number;
   // 标定质量评分 (0 - 100)
@@ -218,6 +221,226 @@ export class SpatialMagneticService {
 
   public getFieldData(): FieldAdaptiveData | null {
     return this.fieldData;
+  }
+
+  /**
+   * 检查两套系统是否受统一校准文件严格约束
+   */
+  public isUnifiedConstraintActive(): boolean {
+    const stored = localStorage.getItem('rtk_compass_unified_constrained');
+    return stored === 'true';
+  }
+
+  /**
+   * 获取统一约束的目标正确航向值
+   */
+  public getUnifiedTargetHeading(): number | null {
+    const stored = localStorage.getItem('rtk_compass_unified_target');
+    if (stored !== null) {
+      const val = parseFloat(stored);
+      if (!isNaN(val)) return val;
+    }
+    return null;
+  }
+
+  /**
+   * 获取地质与航向罗盘独立偏差角
+   */
+  public getGeologicalOffset(): number {
+    // 若受统一校准完全约束，优先采用统一校准偏角
+    if (this.isUnifiedConstraintActive()) {
+      const unifiedOffset = localStorage.getItem('rtk_compass_unified_offset');
+      if (unifiedOffset !== null) {
+        const parsed = parseFloat(unifiedOffset);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+    if (this.baselineData?.geologicalOffset !== undefined) {
+      return this.baselineData.geologicalOffset;
+    }
+    const stored = localStorage.getItem('rtk_compass_geological_offset');
+    if (stored !== null) {
+      const parsed = parseFloat(stored);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return this.baselineData?.physicalCompassOffset || 0;
+  }
+
+  /**
+   * 保存地质与航向罗盘独立偏差角
+   */
+  public setGeologicalOffset(offset: number): void {
+    const norm = Math.round(((((offset % 360) + 540) % 360) - 180) * 10) / 10;
+    try {
+      localStorage.setItem('rtk_compass_geological_offset', String(norm));
+    } catch (e) {
+      console.warn(e);
+    }
+    if (this.baselineData) {
+      this.baselineData.geologicalOffset = norm;
+      this.baselineData.physicalCompassOffset = norm;
+      try {
+        localStorage.setItem(STORAGE_KEY_BASELINE, JSON.stringify(this.baselineData));
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+  }
+
+  /**
+   * 获取 GPS Test Plus 独立偏差角
+   */
+  public getGpsTestOffset(): number {
+    // 若受统一校准完全约束，优先采用统一校准偏角
+    if (this.isUnifiedConstraintActive()) {
+      const unifiedOffset = localStorage.getItem('rtk_compass_unified_offset');
+      if (unifiedOffset !== null) {
+        const parsed = parseFloat(unifiedOffset);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+    if (this.baselineData?.gpsTestOffset !== undefined) {
+      return this.baselineData.gpsTestOffset;
+    }
+    const stored = localStorage.getItem('rtk_compass_gpstest_offset');
+    if (stored !== null) {
+      const parsed = parseFloat(stored);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return this.baselineData?.physicalCompassOffset || 0;
+  }
+
+  /**
+   * 保存 GPS Test Plus 独立偏差角
+   */
+  public setGpsTestOffset(offset: number): void {
+    const norm = Math.round(((((offset % 360) + 540) % 360) - 180) * 10) / 10;
+    try {
+      localStorage.setItem('rtk_compass_gpstest_offset', String(norm));
+    } catch (e) {
+      console.warn(e);
+    }
+    if (this.baselineData) {
+      this.baselineData.gpsTestOffset = norm;
+      try {
+        localStorage.setItem(STORAGE_KEY_BASELINE, JSON.stringify(this.baselineData));
+      } catch (e) {
+        console.warn(e);
+      }
+    }
+  }
+
+  /**
+   * 【USER REQ】统一校准两套系统至当前正确航向并保存入文件
+   * 
+   * 在未更新新值前，指南针校正受此值完全约束，两套系统指南针校正参数向该值统一！
+   */
+  public async saveUnifiedCalibration(
+    targetHeading: number,
+    measuredHeading: number,
+    screenMode: 'portrait' | 'landscape' = 'portrait'
+  ): Promise<{ success: boolean; offset: number; path: string }> {
+    // 计算补偿偏角: Target = Measured + Offset => Offset = Target - Measured
+    let neededOffset = (((targetHeading - measuredHeading) + 540) % 360) - 180;
+    if (screenMode === 'landscape') {
+      neededOffset = (((neededOffset - 90) + 540) % 360) - 180;
+    }
+    const normOffset = Math.round(neededOffset * 10) / 10;
+
+    // 1. 同步更新两套系统独立偏差
+    this.setGeologicalOffset(normOffset);
+    this.setGpsTestOffset(normOffset);
+
+    // 2. 标记完全约束状态与目标航向
+    try {
+      localStorage.setItem('rtk_compass_unified_offset', String(normOffset));
+      localStorage.setItem('rtk_compass_unified_target', String(targetHeading));
+      localStorage.setItem('rtk_compass_unified_constrained', 'true');
+    } catch (e) {
+      console.warn(e);
+    }
+
+    // 3. 构建统一校准结构并持久化存入文件系统
+    const unifiedRecord = {
+      version: 1,
+      calibrationType: 'unified_dual_system_constraint',
+      calibratedAt: new Date().toLocaleString(),
+      calibratedTimestamp: Date.now(),
+      targetCorrectHeading: targetHeading,
+      measuredHeading: Math.round(measuredHeading * 10) / 10,
+      screenMode,
+      unifiedOffsetDegrees: normOffset,
+      constraintStatus: 'ACTIVE_STRICT_UNIFIED_LOCK',
+      note: '两套指南针系统（地质与航向 / GPS Test Plus）完全受此校准基准严格约束统一，在未更新新值前不得受其他随机漂移更改',
+      baselineLocation: this.baselineData?.baselineLocation || { lat: 31.23, lon: 121.47 },
+      phoneHardIron: this.baselineData?.phoneHardIron || [0, 0, 0],
+      scaleFactors: this.baselineData?.scaleFactors || [1, 1, 1],
+    };
+
+    const jsonContent = JSON.stringify(unifiedRecord, null, 2);
+
+    // 存入 com.rtkproject.files/magnetomater calibration data/unified_compass_calibration.json
+    const res = await fileStorageService.saveFile(
+      MAGNETOMETER_STORAGE_FOLDER,
+      'unified_compass_calibration.json',
+      jsonContent,
+      'application/json'
+    );
+
+    // 同步更新 baseline_calibration_latest.json
+    if (this.baselineData) {
+      this.baselineData.physicalCompassOffset = normOffset;
+      this.baselineData.geologicalOffset = normOffset;
+      this.baselineData.gpsTestOffset = normOffset;
+      this.baselineData.physicalReferenceHeading = targetHeading;
+      await this.saveBaselineData(this.baselineData);
+    }
+
+    return {
+      success: true,
+      offset: normOffset,
+      path: res.path || `com.rtkproject.files/${MAGNETOMETER_STORAGE_FOLDER}/unified_compass_calibration.json`,
+    };
+  }
+
+  /**
+   * 校准偏角归零复位 (解除统一约束)
+   */
+  public async resetCalibrationOffsets(): Promise<void> {
+    try {
+      localStorage.removeItem('rtk_compass_unified_constrained');
+      localStorage.removeItem('rtk_compass_unified_offset');
+      localStorage.removeItem('rtk_compass_unified_target');
+      localStorage.setItem('rtk_compass_geological_offset', '0');
+      localStorage.setItem('rtk_compass_gpstest_offset', '0');
+    } catch (e) {
+      console.warn(e);
+    }
+
+    this.setGeologicalOffset(0);
+    this.setGpsTestOffset(0);
+
+    if (this.baselineData) {
+      this.baselineData.physicalCompassOffset = 0;
+      this.baselineData.geologicalOffset = 0;
+      this.baselineData.gpsTestOffset = 0;
+      await this.saveBaselineData(this.baselineData);
+    }
+
+    // 记录归零文件
+    const resetRecord = {
+      version: 1,
+      calibrationType: 'unified_reset',
+      resetAt: new Date().toLocaleString(),
+      unifiedOffsetDegrees: 0,
+      constraintStatus: 'RESET_ZERO',
+    };
+    await fileStorageService.saveFile(
+      MAGNETOMETER_STORAGE_FOLDER,
+      'unified_compass_calibration.json',
+      JSON.stringify(resetRecord, null, 2),
+      'application/json'
+    );
   }
 
   /**
@@ -449,7 +672,8 @@ export class SpatialMagneticService {
     gpsCourse?: number,
     lat?: number,
     lon?: number,
-    useTrueNorth: boolean = false
+    useTrueNorth: boolean = false,
+    compassSystem: 'geological' | 'gpstest' = 'geological'
   ): {
     heading: number;
     correctionApplied: number;
@@ -460,16 +684,16 @@ export class SpatialMagneticService {
     let totalCorrection = 0;
     let source: 'calibrated_mag' | 'field_adaptive' | 'polar_blended' | 'raw' = 'raw';
 
-    // 1. 施加手机本性基准校准（内部硬磁偏角 + 物理指南针标定差值）
-    if (this.baselineData) {
-      const physicalOffset = this.baselineData.physicalCompassOffset || 0;
-      // 内部硬磁引起的横向方位微偏 (由 Vx, Vy 比率推导)
-      const [vx, vy] = this.baselineData.phoneHardIron;
-      const internalBiasAngle = (Math.atan2(vy, vx) * 180) / Math.PI * 0.05; // 尺度折算
-
-      const baselineCorrection = physicalOffset - internalBiasAngle;
-      current += baselineCorrection;
-      totalCorrection += baselineCorrection;
+    // 1. 施加对应系统的独立物理指南针标定差值
+    const systemOffset = compassSystem === 'gpstest' ? this.getGpsTestOffset() : this.getGeologicalOffset();
+    if (systemOffset !== 0) {
+      current += systemOffset;
+      totalCorrection += systemOffset;
+      source = 'calibrated_mag';
+    } else if (this.baselineData?.physicalCompassOffset) {
+      const physicalOffset = this.baselineData.physicalCompassOffset;
+      current += physicalOffset;
+      totalCorrection += physicalOffset;
       source = 'calibrated_mag';
     }
 

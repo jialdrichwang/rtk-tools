@@ -19,6 +19,8 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Process;
 import android.provider.Settings;
+import android.view.Surface;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import androidx.annotation.NonNull;
@@ -45,29 +47,45 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
     private HandlerThread sensorThread;
     private Handler sensorHandler;
 
-    // Volatile sensor raw data buffers
+    // GPS Test Plus style sensor raw data buffers & matrices
     private final float[] latestAcc = new float[3];
     private final float[] latestGyro = new float[3];
     private final float[] latestMag = new float[3];
-    private final float[] rotationMatrix = new float[9];
+    private final float[] rawRotationMatrix = new float[16];
+    private final float[] remappedRotationMatrix = new float[16];
     private final float[] orientationAngles = new float[3];
+
     private volatile boolean hasAcc = false;
     private volatile boolean hasGyro = false;
     private volatile boolean hasMag = false;
+    private volatile boolean hasRotationVector = false;
     private volatile int sensorAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH;
 
-    // Native Madgwick AHRS state (Quaternion q0, q1, q2, q3)
-    private float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;
-    private float madgwickBeta = 0.12f;
-    private long lastSensorTimestampNs = 0;
-    private volatile float nativeComputedYaw = 0.0f;
-    private volatile float nativePitch = 0.0f;
-    private volatile float nativeRoll = 0.0f;
+    // GPS Test Plus compass core orientation states
+    private volatile float nativeComputedYaw = 0.0f; // Filtered Magnetic Heading (0 - 360)
+    private volatile float nativeTrueHeading = 0.0f; // Filtered True North Heading (0 - 360)
+    private volatile float nativeDeclination = 0.0f; // Geomagnetic declination
+    private volatile float nativePitch = 0.0f;       // Elevation tilt angle (-90 to +90)
+    private volatile float nativeRoll = 0.0f;        // Bank roll angle (-180 to +180)
     private volatile float nativeFieldStrength = 48.0f;
     private volatile boolean isMagneticAnomaly = false;
+    private volatile boolean isCompassInitialized = false;
+    private volatile boolean isDeviceLevel = true;
+    private volatile String sensorSource = "ROTATION_VECTOR";
     private volatile float sampleRateHz = 50.0f;
     private int sampleCount = 0;
     private long lastRateSampleTime = 0;
+
+    // Device GNSS Location for GeomagneticField declination
+    private volatile float deviceLat = 31.23f;
+    private volatile float deviceLon = 121.47f;
+    private volatile float deviceAlt = 10.0f;
+    private long lastGeomagCalcTime = 0;
+
+    // GPS Test Plus adaptive progressive damping timer
+    private long lastSensorTimestampNs = 0;
+    private float stableDurationSec = 0.0f;
+    private float lastRawFusedYaw = 0.0f;
 
     // Calibration offsets
     private float hardIronOx = 0.0f, hardIronOy = 0.0f, hardIronOz = 0.0f;
@@ -172,22 +190,30 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
                         }
                     }
 
-                    // ====== High Performance 9-Axis Native Compass API ======
+                    // ====== GPS Test Plus 9-Axis Native Compass API ======
                     @JavascriptInterface
                     public String getNativeCompassStatus() {
                         try {
                             JSONObject obj = new JSONObject();
                             obj.put("yaw", (double) Math.round(nativeComputedYaw * 10.0f) / 10.0);
+                            obj.put("rawYaw", (double) Math.round(nativeComputedYaw * 10.0f) / 10.0);
+                            float calYaw = ((nativeComputedYaw + physicalCompassOffset) % 360.0f + 360.0f) % 360.0f;
+                            obj.put("calibratedYaw", (double) Math.round(calYaw * 10.0f) / 10.0);
+                            obj.put("trueHeading", (double) Math.round(nativeTrueHeading * 10.0f) / 10.0);
+                            obj.put("declination", (double) Math.round(nativeDeclination * 10.0f) / 10.0);
                             obj.put("pitch", (double) Math.round(nativePitch * 10.0f) / 10.0);
                             obj.put("roll", (double) Math.round(nativeRoll * 10.0f) / 10.0);
+                            obj.put("isLevel", isDeviceLevel);
                             obj.put("fieldStrength", (double) Math.round(nativeFieldStrength * 10.0f) / 10.0);
                             obj.put("isAnomaly", isMagneticAnomaly);
+                            obj.put("isReady", isCompassInitialized && (hasRotationVector || (hasAcc && hasMag)));
                             obj.put("sampleRate", (double) Math.round(sampleRateHz * 10.0f) / 10.0);
                             obj.put("accuracy", sensorAccuracy);
+                            obj.put("sensorSource", sensorSource);
                             obj.put("hasGyro", hasGyro);
                             obj.put("hasAcc", hasAcc);
                             obj.put("hasMag", hasMag);
-                            // Raw buffers for JS Madgwick/Kalman verification
+                            // Raw buffers
                             obj.put("ax", (double) latestAcc[0]);
                             obj.put("ay", (double) latestAcc[1]);
                             obj.put("az", (double) latestAcc[2]);
@@ -201,6 +227,19 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
                         } catch (Exception e) {
                             return "{}";
                         }
+                    }
+
+                    @JavascriptInterface
+                    public void setDeviceLocation(float lat, float lon, float alt) {
+                        deviceLat = lat;
+                        deviceLon = lon;
+                        deviceAlt = alt;
+                        try {
+                            long timeMillis = System.currentTimeMillis();
+                            GeomagneticField geoField = new GeomagneticField(lat, lon, alt, timeMillis);
+                            nativeDeclination = geoField.getDeclination();
+                            lastGeomagCalcTime = timeMillis;
+                        } catch (Exception ignored) {}
                     }
 
                     @JavascriptInterface
@@ -334,7 +373,13 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
     }
 
     /**
-     * Native Real-time 9-Axis Sensor Fusion & Madgwick AHRS Loop
+     * GPS Test Plus Sensor Processing Core
+     * Integrates:
+     * 1. Hardware Sensor Fusion (TYPE_ROTATION_VECTOR) with Accel/Mag fallback
+     * 2. Display rotation coordinate remapping (SensorManager.remapCoordinateSystem)
+     * 3. Elevation Pitch & Bank Roll calculation
+     * 4. GeomagneticField real-time True North calculation
+     * 5. Shortest-path continuous angular low-pass filter with progressive damping
      */
     @Override
     public void onSensorChanged(SensorEvent event) {
@@ -343,27 +388,19 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
         final long nowNs = event.timestamp > 0 ? event.timestamp : System.nanoTime();
         final int sensorType = event.sensor.getType();
 
-        if (sensorType == Sensor.TYPE_ACCELEROMETER) {
-            latestAcc[0] = event.values[0];
-            latestAcc[1] = event.values[1];
-            latestAcc[2] = event.values[2];
+        if (sensorType == Sensor.TYPE_ROTATION_VECTOR) {
+            SensorManager.getRotationMatrixFromVector(rawRotationMatrix, event.values);
+            hasRotationVector = true;
+            sensorSource = "ROTATION_VECTOR";
+        } else if (sensorType == Sensor.TYPE_ACCELEROMETER) {
+            System.arraycopy(event.values, 0, latestAcc, 0, 3);
             hasAcc = true;
-        } else if (sensorType == Sensor.TYPE_GYROSCOPE) {
-            latestGyro[0] = event.values[0];
-            latestGyro[1] = event.values[1];
-            latestGyro[2] = event.values[2];
-            hasGyro = true;
         } else if (sensorType == Sensor.TYPE_MAGNETIC_FIELD) {
-            latestMag[0] = event.values[0];
-            latestMag[1] = event.values[1];
-            latestMag[2] = event.values[2];
+            System.arraycopy(event.values, 0, latestMag, 0, 3);
             hasMag = true;
-        } else if (sensorType == Sensor.TYPE_ROTATION_VECTOR) {
-            // Backup orientation matrix
-            try {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values);
-                SensorManager.getOrientation(rotationMatrix, orientationAngles);
-            } catch (Exception ignored) {}
+        } else if (sensorType == Sensor.TYPE_GYROSCOPE) {
+            System.arraycopy(event.values, 0, latestGyro, 0, 3);
+            hasGyro = true;
         }
 
         // Sampling rate tracking
@@ -374,9 +411,6 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
             sampleCount = 0;
             lastRateSampleTime = currentTimeMs;
         }
-
-        // Only compute when we have valid sensor measurements
-        if (!hasAcc || !hasMag) return;
 
         float dt = lastSensorTimestampNs > 0 ? (float) ((nowNs - lastSensorTimestampNs) * 1.0e-9) : 0.02f;
         if (dt <= 0.0f || dt > 0.5f) dt = 0.02f;
@@ -390,123 +424,115 @@ public class MainActivity extends BridgeActivity implements SensorEventListener 
         // Magnetic field strength & anomaly check
         float fieldStrength = (float) Math.sqrt(mx * mx + my * my + mz * mz);
         nativeFieldStrength = fieldStrength;
-        float expectedField = 48.0f;
-        float deviation = Math.abs(fieldStrength - expectedField) / expectedField;
+        float deviation = Math.abs(fieldStrength - 48.0f) / 48.0f;
         isMagneticAnomaly = deviation > 0.35f || fieldStrength < 18.0f || fieldStrength > 95.0f;
 
-        float ax = latestAcc[0];
-        float ay = latestAcc[1];
-        float az = latestAcc[2];
-
-        float gx = latestGyro[0];
-        float gy = latestGyro[1];
-        float gz = latestGyro[2];
-
-        // If anomaly or no gyro, fallback or pure gyro integration
-        if (isMagneticAnomaly && hasGyro) {
-            // Pure gyro quaternion integration (freeze magnetometer correction during anomaly)
-            float qDot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
-            float qDot2 = 0.5f * ( q0 * gx + q2 * gz - q3 * gy);
-            float qDot3 = 0.5f * ( q0 * gy - q1 * gz + q3 * gx);
-            float qDot4 = 0.5f * ( q0 * gz + q1 * gy - q2 * gx);
-            q0 += qDot1 * dt;
-            q1 += qDot2 * dt;
-            q2 += qDot3 * dt;
-            q3 += qDot4 * dt;
-            float norm = (float) Math.sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
-            if (norm > 0) {
-                q0 /= norm; q1 /= norm; q2 /= norm; q3 /= norm;
-            }
-        } else {
-            // Native Madgwick 9-Axis AHRS Fusion Algorithm
-            float norm;
-            float hx, hy, _2bx, _2bz, _4bx, _4bz;
-            float _2q0mx, _2q0my, _2q0mz, _2q1mx, _2q2mx, _2q3mx;
-            float s0, s1, s2, s3;
-            float qDot1, qDot2, qDot3, qDot4;
-
-            norm = (float) Math.sqrt(mx * mx + my * my + mz * mz);
-            if (norm == 0.0f) return;
-            mx /= norm; my /= norm; mz /= norm;
-
-            norm = (float) Math.sqrt(ax * ax + ay * ay + az * az);
-            if (norm == 0.0f) return;
-            ax /= norm; ay /= norm; az /= norm;
-
-            _2q0mx = 2.0f * q0 * mx; _2q0my = 2.0f * q0 * my; _2q0mz = 2.0f * q0 * mz;
-            _2q1mx = 2.0f * q1 * mx; _2q2mx = 2.0f * q2 * mx; _2q3mx = 2.0f * q3 * mx;
-
-            hx = mx * q0 * q0 - 2.0f * q0 * my * q3 + 2.0f * q0 * mz * q2 +
-                 mx * q1 * q1 + 2.0f * q1 * my * q2 + 2.0f * q1 * mz * q3 -
-                 mx * q2 * q2 - mx * q3 * q3;
-            hy = 2.0f * q0 * mx * q3 + my * q0 * q0 - 2.0f * q0 * mz * q1 +
-                 2.0f * q1 * mx * q2 - my * q1 * q1 + my * q2 * q2 +
-                 2.0f * q2 * mz * q3 - my * q3 * q3;
-
-            _2bx = (float) Math.sqrt(hx * hx + hy * hy);
-            _2bz = -_2q0mx * q2 + _2q0my * q1 + mz * q0 * q0 +
-                   _2q1mx * q3 - mz * q1 * q1 + 2.0f * q1 * q2 * my -
-                   mz * q2 * q2 + mz * q3 * q3;
-            _4bx = 2.0f * _2bx;
-            _4bz = 2.0f * _2bz;
-
-            // Gradient descent algorithm
-            s0 = -_2bz * q2 * (2.0f * q1 * q3 - 2.0f * q0 * q2 - ax) +
-                  _2bx * q3 * (2.0f * q1 * q2 + 2.0f * q0 * q3 - ay) +
-                 (-_2bx * q2 + _2bz * q1) * (2.0f * q0 * q1 + 2.0f * q2 * q3 - az);
-            s1 = _2bz * q3 * (2.0f * q1 * q3 - 2.0f * q0 * q2 - ax) +
-                 _2bx * q2 * (2.0f * q1 * q2 + 2.0f * q0 * q3 - ay) +
-                 (_2bx * q1 + _2bz * q0) * (2.0f * q0 * q1 + 2.0f * q2 * q3 - az);
-            s2 = -2.0f * _2bz * q0 * (2.0f * q1 * q3 - 2.0f * q0 * q2 - ax) +
-                 (_2bx * q3 - 4.0f * q2 * _2bx) * (2.0f * q1 * q2 + 2.0f * q0 * q3 - ay) +
-                 (_2bx * q0 - 4.0f * q2 * _2bz) * (2.0f * q0 * q1 + 2.0f * q2 * q3 - az);
-            s3 = 2.0f * _2bz * q1 * (2.0f * q1 * q3 - 2.0f * q0 * q2 - ax) +
-                 (_2bx * q2 + 4.0f * q3 * _2bx) * (2.0f * q1 * q2 + 2.0f * q0 * q3 - ay) +
-                 (_2bx * q1 + _2bz * q0) * (2.0f * q0 * q1 + 2.0f * q2 * q3 - az);
-
-            norm = (float) Math.sqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
-            if (norm > 0.0f) {
-                s0 /= norm; s1 /= norm; s2 /= norm; s3 /= norm;
-            }
-
-            qDot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz) - madgwickBeta * s0;
-            qDot2 = 0.5f * ( q0 * gx + q2 * gz - q3 * gy) - madgwickBeta * s1;
-            qDot3 = 0.5f * ( q0 * gy - q1 * gz + q3 * gx) - madgwickBeta * s2;
-            qDot4 = 0.5f * ( q0 * gz + q1 * gy - q2 * gx) - madgwickBeta * s3;
-
-            q0 += qDot1 * dt;
-            q1 += qDot2 * dt;
-            q2 += qDot3 * dt;
-            q3 += qDot4 * dt;
-
-            norm = (float) Math.sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
-            if (norm > 0.0f) {
-                q0 /= norm; q1 /= norm; q2 /= norm; q3 /= norm;
-            }
+        // Determine Rotation Matrix (Priority: ROTATION_VECTOR -> ACCEL+MAG)
+        if (!hasRotationVector) {
+            if (!hasAcc || !hasMag) return;
+            float[] accVals = new float[]{latestAcc[0], latestAcc[1], latestAcc[2]};
+            float[] magVals = new float[]{mx, my, mz};
+            boolean ok = SensorManager.getRotationMatrix(rawRotationMatrix, null, accVals, magVals);
+            if (!ok) return;
+            sensorSource = "ACCEL_MAG";
         }
 
-        // Extract Euler yaw, pitch, roll
-        float siny_cosp = 2.0f * (q0 * q3 + q1 * q2);
-        float cosy_cosp = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
-        float yawRad = (float) Math.atan2(siny_cosp, cosy_cosp);
-        float yawDeg = (float) (yawRad * 180.0 / Math.PI);
-        if (yawDeg < 0) yawDeg += 360.0f;
+        // GPS Test Plus Display Rotation Remapping (Crucial for correct heading in Portrait/Landscape)
+        int displayRotation = Surface.ROTATION_0;
+        try {
+            WindowManager wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+            if (wm != null && wm.getDefaultDisplay() != null) {
+                displayRotation = wm.getDefaultDisplay().getRotation();
+            }
+        } catch (Exception ignored) {}
 
-        // Apply physical offset
-        yawDeg = (yawDeg + physicalCompassOffset + 360.0f) % 360.0f;
-        nativeComputedYaw = yawDeg;
-
-        // Roll & Pitch
-        float sinr_cosp = 2.0f * (q0 * q1 + q2 * q3);
-        float cosr_cosp = 1.0f - 2.0f * (q1 * q1 + q2 * q2);
-        nativeRoll = (float) (Math.atan2(sinr_cosp, cosr_cosp) * 180.0 / Math.PI);
-
-        float sinp = 2.0f * (q0 * q2 - q3 * q1);
-        if (Math.abs(sinp) >= 1.0f) {
-            nativePitch = Math.copySign(90.0f, sinp);
-        } else {
-            nativePitch = (float) (Math.asin(sinp) * 180.0 / Math.PI);
+        int axisX = SensorManager.AXIS_X;
+        int axisY = SensorManager.AXIS_Y;
+        switch (displayRotation) {
+            case Surface.ROTATION_0:
+                axisX = SensorManager.AXIS_X;
+                axisY = SensorManager.AXIS_Y;
+                break;
+            case Surface.ROTATION_90:
+                axisX = SensorManager.AXIS_Y;
+                axisY = SensorManager.AXIS_MINUS_X;
+                break;
+            case Surface.ROTATION_180:
+                axisX = SensorManager.AXIS_MINUS_X;
+                axisY = SensorManager.AXIS_MINUS_Y;
+                break;
+            case Surface.ROTATION_270:
+                axisX = SensorManager.AXIS_MINUS_Y;
+                axisY = SensorManager.AXIS_X;
+                break;
         }
+
+        boolean remapSuccess = SensorManager.remapCoordinateSystem(rawRotationMatrix, axisX, axisY, remappedRotationMatrix);
+        float[] finalR = remapSuccess ? remappedRotationMatrix : rawRotationMatrix;
+        SensorManager.getOrientation(finalR, orientationAngles);
+
+        float rawAzimuth = (float) Math.toDegrees(orientationAngles[0]);
+        if (rawAzimuth < 0) rawAzimuth += 360.0f;
+        float pitch = (float) Math.toDegrees(orientationAngles[1]);
+        float roll = (float) Math.toDegrees(orientationAngles[2]);
+
+        nativePitch = pitch;
+        nativeRoll = roll;
+        isDeviceLevel = Math.abs(pitch) < 15.0f && Math.abs(roll) < 15.0f;
+
+        // Periodic Geomagnetic Declination update via GeomagneticField
+        if (currentTimeMs - lastGeomagCalcTime >= 15000) {
+            try {
+                GeomagneticField geoField = new GeomagneticField(deviceLat, deviceLon, deviceAlt, currentTimeMs);
+                nativeDeclination = geoField.getDeclination();
+                lastGeomagCalcTime = currentTimeMs;
+            } catch (Exception ignored) {}
+        }
+
+        // 1. Instant lock on startup (< 1s)
+        if (!isCompassInitialized) {
+            nativeComputedYaw = rawAzimuth;
+            nativeTrueHeading = ((rawAzimuth + nativeDeclination) % 360.0f + 360.0f) % 360.0f;
+            lastRawFusedYaw = rawAzimuth;
+            stableDurationSec = 0.0f;
+            isCompassInitialized = true;
+            return;
+        }
+
+        // 2. Shortest angular distance across 359° <-> 0° <-> 1° (continuous smooth wrap-around)
+        float angularDiff = rawAzimuth - nativeComputedYaw;
+        while (angularDiff > 180.0f) angularDiff -= 360.0f;
+        while (angularDiff < -180.0f) angularDiff += 360.0f;
+
+        // 3. Angular velocity check
+        float gyroMagDeg = (float) Math.hypot(latestGyro[0], Math.hypot(latestGyro[1], latestGyro[2])) * (180.0f / (float) Math.PI);
+        if (Math.abs(angularDiff) > 3.0f || gyroMagDeg > 5.0f) {
+            stableDurationSec = 0.0f;
+        } else {
+            stableDurationSec += dt;
+        }
+
+        // 4. GPS Test Plus Progressive Damping: fast response when moving, heavy damping when stationary
+        float dampingAlpha;
+        if (stableDurationSec < 2.0f) {
+            dampingAlpha = 0.35f; // Fast acquisition
+        } else if (stableDurationSec < 7.0f) {
+            dampingAlpha = 0.12f; // Smooth transition
+        } else if (stableDurationSec < 15.0f) {
+            dampingAlpha = 0.045f; // Heavy fluid damping (8-15s)
+        } else {
+            dampingAlpha = 0.02f; // Dead-still lock (>15s)
+        }
+
+        // Jitter deadband when fully stabilized
+        if (stableDurationSec >= 7.0f && Math.abs(angularDiff) < 0.25f) {
+            return;
+        }
+
+        // Continuous smooth update
+        nativeComputedYaw = ((nativeComputedYaw + angularDiff * dampingAlpha) % 360.0f + 360.0f) % 360.0f;
+        nativeTrueHeading = ((nativeComputedYaw + nativeDeclination) % 360.0f + 360.0f) % 360.0f;
+        lastRawFusedYaw = rawAzimuth;
     }
 
     /**

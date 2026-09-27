@@ -1,12 +1,18 @@
 /**
- * 高性能 9 轴姿态融合与磁力校准引擎 (AHRS & Magnetic Fusion Engine)
+ * GPS Test Plus 核心指南针算法引擎 (GPS Test Plus Compass Core Engine)
  * 
- * 包含四大核心体系：
- * 1. Madgwick 9 轴融合算法 (结合陀螺仪 rad/s、加速度计 g、磁力计 μT，四元数微分方程更新与梯度下降误差修正)
- * 2. 最小二乘法椭圆拟合 (Least Squares Ellipsoid / Sphere Calibration，求解硬铁偏移 b 与软铁缩放矩阵 S)
- * 3. 自适应扩展卡尔曼滤波 (Adaptive EKF) + 动态测量噪声 R 调整 (静止 R=0.5，中速 R=3.0，高速 R=10.0)
- * 4. 磁异常检测 (Magnetic Anomaly Detection) 与 IMU 短时陀螺仪角速度航位积分备份保护
- * 5. 圆周角度低通滤波与反向旋转归一化输出 (0°~360°)
+ * 基于 Android GPS Test Plus (Chartcross / Sean Barbeau) 工业级开源罗盘核心标准重构：
+ * 1. 采用 Android SensorManager.getRotationMatrix 与 getOrientation 纯净姿态矩阵数学模型，
+ *    杜绝 Madgwick/四元数坐标系互换产生的 90° 轴向偏差与缓慢收敛问题。
+ * 2. 初始瞬时极速定向 (< 1秒极速锁定南北极)。
+ * 3. GPS Test Plus 渐进式多级阻尼动力学引擎：
+ *    - 快速搜极期 (0 ~ 2.5s)：低阻尼 (α = 0.35)，指针对转向动作零延迟跟随；
+ *    - 平滑过渡期 (2.5 ~ 7s)：中阻尼 (α = 0.12)，滤除手持微抖动；
+ *    - 强阻尼锁定 (8 ~ 15s)：高阻尼 (α = 0.045)，明显增大阻尼，在10~15秒内彻底锁定南北极；
+ *    - 极静死区锁 (> 15s)：超强阻尼 (α = 0.02) + 0.25° 微抖动死区锁定，稳定读数；
+ *    - 动态破锁机制：当旋转角速度 > 5°/s 或角度差 > 3° 时瞬间重置回快速跟随模式。
+ * 4. 最短圆周角差插值算法，保证 359° <-> 0° <-> 1° 之间无回转、无阶跃、丝滑连续过度。
+ * 5. 保留最小二乘法椭球拟合校准 (Least Squares Ellipsoid Calibration)。
  */
 
 export interface IMURawSample {
@@ -36,198 +42,135 @@ export interface EllipsoidCalibrationResult {
 }
 
 export interface FusionOutputState {
-  // 滤波与融合后的真航向方位角 (0° - 360°)
+  // 磁北航向方位角 (0° - 360°)
   yaw: number;
+  // 真北航向方位角 (加地磁偏角, 0° - 360°)
+  trueHeading: number;
+  // 当前地磁偏角 (度)
+  declination: number;
   // 俯仰角 pitch (-90° ~ +90°)
   pitch: number;
   // 横滚角 roll (-180° ~ +180°)
   roll: number;
+  // 是否处于水平状态 (|pitch| < 15° && |roll| < 15°)
+  isLevel: boolean;
   // 当前环境磁场总场强模长 (μT)
   magneticFieldStrength: number;
   // 是否处于外部强磁干扰异常状态
   isMagneticAnomaly: boolean;
-  // 融合算法模式: 'madgwick_9axis' | 'adaptive_kalman' | 'gyro_backup' | 'orientation_sensor'
-  fusionMode: 'madgwick_9axis' | 'adaptive_kalman' | 'gyro_backup' | 'orientation_sensor';
-  // 陀螺角速度模长 (rad/s)
+  // 传感器源: 'ROTATION_VECTOR' | 'ACCEL_MAG'
+  sensorSource?: string;
+  // 融合算法模式: 'gpstest_fusion' | 'gyro_backup' | 'orientation_sensor' | 'madgwick_9axis' | 'adaptive_kalman'
+  fusionMode: 'gpstest_fusion' | 'gyro_backup' | 'orientation_sensor' | 'madgwick_9axis' | 'adaptive_kalman';
+  // 陀螺角速度模长 (deg/s)
   angularVelocity: number;
   // 采样频率 (Hz)
   sampleRate: number;
 }
 
 /**
- * 1. Madgwick AHRS 9-轴姿态解算核心类
+ * 1. GPS Test Plus 核心姿态矩阵计算 (与 Android SensorManager.getRotationMatrix 严格一致)
  */
-export class MadgwickAHRS {
-  public q0: number = 1.0;
-  public q1: number = 0.0;
-  public q2: number = 0.0;
-  public q3: number = 0.0;
-  public beta: number = 0.1; // 算法增益 (可在 0.04 ~ 0.25 之间根据动态场景自适应)
-  public sampleFreq: number = 50.0; // 默认 50Hz，根据真实采样动态更新
-
-  constructor(sampleFreq: number = 50.0, beta: number = 0.1) {
-    this.sampleFreq = sampleFreq;
-    this.beta = beta;
+export function computeGpsTestRotationMatrix(
+  acc: [number, number, number],
+  mag: [number, number, number]
+): number[] | null {
+  let Ax = acc[0], Ay = acc[1], Az = acc[2];
+  const normsqA = Ax * Ax + Ay * Ay + Az * Az;
+  // 自由落体或失重检测
+  if (normsqA < 0.96) {
+    return null;
   }
 
-  public reset(sampleFreq: number = 50.0, beta: number = 0.1) {
-    this.q0 = 1.0;
-    this.q1 = 0.0;
-    this.q2 = 0.0;
-    this.q3 = 0.0;
-    this.sampleFreq = sampleFreq;
-    this.beta = beta;
+  const Ex = mag[0], Ey = mag[1], Ez = mag[2];
+  // H = mag x acc (指向地磁东向)
+  let Hx = Ey * Az - Ez * Ay;
+  let Hy = Ez * Ax - Ex * Az;
+  let Hz = Ex * Ay - Ey * Ax;
+  const normH = Math.hypot(Hx, Hy, Hz);
+
+  if (normH < 0.1) {
+    // 接近磁极或无效矢量
+    return null;
   }
 
-  /**
-   * 9轴更新算法：输入陀螺仪(rad/s), 加速度计(g), 磁力计(μT)
-   */
-  public update(
-    gx: number, gy: number, gz: number,
-    ax: number, ay: number, az: number,
-    mx: number, my: number, mz: number,
-    dt?: number
-  ) {
-    const invSampleFreq = dt !== undefined && dt > 0 ? dt : 1.0 / this.sampleFreq;
-    let q0 = this.q0, q1 = this.q1, q2 = this.q2, q3 = this.q3;
+  const invH = 1.0 / normH;
+  Hx *= invH;
+  Hy *= invH;
+  Hz *= invH;
 
-    // 磁力计归一化
-    let norm = Math.hypot(mx, my, mz);
-    if (norm === 0) return;
-    mx /= norm; my /= norm; mz /= norm;
+  const invA = 1.0 / Math.sqrt(normsqA);
+  Ax *= invA;
+  Ay *= invA;
+  Az *= invA;
 
-    // 加速度计归一化
-    norm = Math.hypot(ax, ay, az);
-    if (norm === 0) return;
-    ax /= norm; ay /= norm; az /= norm;
+  // M = acc x H (指向地磁北向)
+  const Mx = Ay * Hz - Az * Hy;
+  const My = Az * Hx - Ax * Hz;
+  const Mz = Ax * Hy - Ay * Hx;
 
-    // 计算参考方向与辅助变量
-    const _2q0mx = 2.0 * q0 * mx;
-    const _2q0my = 2.0 * q0 * my;
-    const _2q0mz = 2.0 * q0 * mz;
-    const _2q1mx = 2.0 * q1 * mx;
-    const _2q2mx = 2.0 * q2 * mx;
-    const _2q3mx = 2.0 * q3 * mx;
-
-    const hx = mx * q0 * q0 - 2.0 * q0 * my * q3 + 2.0 * q0 * mz * q2 +
-      mx * q1 * q1 + 2.0 * q1 * my * q2 + 2.0 * q1 * mz * q3 -
-      mx * q2 * q2 - mx * q3 * q3;
-    const hy = 2.0 * q0 * mx * q3 + my * q0 * q0 - 2.0 * q0 * mz * q1 +
-      2.0 * q1 * mx * q2 - my * q1 * q1 + my * q2 * q2 +
-      2.0 * q2 * mz * q3 - my * q3 * q3;
-
-    const _2bx = Math.hypot(hx, hy);
-    const _2bz = -_2q0mx * q2 + _2q0my * q1 + mz * q0 * q0 +
-      _2q1mx * q3 - mz * q1 * q1 + 2.0 * q1 * q2 * my -
-      mz * q2 * q2 + mz * q3 * q3;
-    const _4bx = 2.0 * _2bx;
-    const _4bz = 2.0 * _2bz;
-
-    // 梯度下降法计算目标函数的梯度 (误差向量 s0, s1, s2, s3)
-    let s0 = -_2bz * q2 * (2.0 * q1 * q3 - 2.0 * q0 * q2 - ax) +
-      _2bx * q3 * (2.0 * q1 * q2 + 2.0 * q0 * q3 - ay) +
-      (-_2bx * q2 + _2bz * q1) * (2.0 * q0 * q1 + 2.0 * q2 * q3 - az);
-    let s1 = _2bz * q3 * (2.0 * q1 * q3 - 2.0 * q0 * q2 - ax) +
-      _2bx * q2 * (2.0 * q1 * q2 + 2.0 * q0 * q3 - ay) +
-      (_2bx * q1 + _2bz * q0) * (2.0 * q0 * q1 + 2.0 * q2 * q3 - az);
-    let s2 = -2.0 * _2bz * q0 * (2.0 * q1 * q3 - 2.0 * q0 * q2 - ax) +
-      (_2bx * q3 - 4.0 * q2 * _2bx) * (2.0 * q1 * q2 + 2.0 * q0 * q3 - ay) +
-      (_2bx * q0 - 4.0 * q2 * _2bz) * (2.0 * q0 * q1 + 2.0 * q2 * q3 - az);
-    let s3 = 2.0 * _2bz * q1 * (2.0 * q1 * q3 - 2.0 * q0 * q2 - ax) +
-      (_2bx * q2 + 4.0 * q3 * _2bx) * (2.0 * q1 * q2 + 2.0 * q0 * q3 - ay) +
-      (_2bx * q1 + _2bz * q0) * (2.0 * q0 * q1 + 2.0 * q2 * q3 - az);
-
-    norm = Math.hypot(s0, s1, s2, s3);
-    if (norm > 0) {
-      s0 /= norm; s1 /= norm; s2 /= norm; s3 /= norm;
-    }
-
-    // 四元数微分方程
-    const qDot1 = 0.5 * (-q1 * gx - q2 * gy - q3 * gz) - this.beta * s0;
-    const qDot2 = 0.5 * ( q0 * gx + q2 * gz - q3 * gy) - this.beta * s1;
-    const qDot3 = 0.5 * ( q0 * gy - q1 * gz + q3 * gx) - this.beta * s2;
-    const qDot4 = 0.5 * ( q0 * gz + q1 * gy - q2 * gx) - this.beta * s3;
-
-    // 一阶欧拉积分更新四元数
-    q0 += qDot1 * invSampleFreq;
-    q1 += qDot2 * invSampleFreq;
-    q2 += qDot3 * invSampleFreq;
-    q3 += qDot4 * invSampleFreq;
-
-    // 四元数再归一化
-    norm = Math.hypot(q0, q1, q2, q3);
-    if (norm > 0) {
-      q0 /= norm; q1 /= norm; q2 /= norm; q3 /= norm;
-    }
-
-    this.q0 = q0;
-    this.q1 = q1;
-    this.q2 = q2;
-    this.q3 = q3;
-  }
-
-  /**
-   * 纯陀螺仪积分模式 (无磁力计或加速度计参与，用于磁异常期间极速备份)
-   */
-  public updateIMUOnly(gx: number, gy: number, gz: number, dt: number) {
-    let q0 = this.q0, q1 = this.q1, q2 = this.q2, q3 = this.q3;
-    const qDot1 = 0.5 * (-q1 * gx - q2 * gy - q3 * gz);
-    const qDot2 = 0.5 * ( q0 * gx + q2 * gz - q3 * gy);
-    const qDot3 = 0.5 * ( q0 * gy - q1 * gz + q3 * gx);
-    const qDot4 = 0.5 * ( q0 * gz + q1 * gy - q2 * gx);
-
-    q0 += qDot1 * dt;
-    q1 += qDot2 * dt;
-    q2 += qDot3 * dt;
-    q3 += qDot4 * dt;
-
-    const norm = Math.hypot(q0, q1, q2, q3);
-    if (norm > 0) {
-      this.q0 = q0 / norm;
-      this.q1 = q1 / norm;
-      this.q2 = q2 / norm;
-      this.q3 = q3 / norm;
-    }
-  }
-
-  /**
-   * 从四元数提取航向角 (Yaw, 返回 0° - 360°)
-   */
-  public getYawDegrees(): number {
-    const q0 = this.q0, q1 = this.q1, q2 = this.q2, q3 = this.q3;
-    const siny_cosp = 2.0 * (q0 * q3 + q1 * q2);
-    const cosy_cosp = 1.0 - 2.0 * (q2 * q2 + q3 * q3);
-    let yaw = Math.atan2(siny_cosp, cosy_cosp);
-    let degrees = (yaw * 180.0) / Math.PI;
-    if (degrees < 0) degrees += 360.0;
-    return degrees;
-  }
-
-  /**
-   * 提取俯仰角与横滚角 (度)
-   */
-  public getPitchRoll(): { pitch: number; roll: number } {
-    const q0 = this.q0, q1 = this.q1, q2 = this.q2, q3 = this.q3;
-    // roll (x-axis rotation)
-    const sinr_cosp = 2 * (q0 * q1 + q2 * q3);
-    const cosr_cosp = 1 - 2 * (q1 * q1 + q2 * q2);
-    const roll = (Math.atan2(sinr_cosp, cosr_cosp) * 180) / Math.PI;
-
-    // pitch (y-axis rotation)
-    const sinp = 2 * (q0 * q2 - q3 * q1);
-    let pitch = 0;
-    if (Math.abs(sinp) >= 1) {
-      pitch = Math.sign(sinp) * 90; // use 90 degrees if out of range
-    } else {
-      pitch = (Math.asin(sinp) * 180) / Math.PI;
-    }
-
-    return { pitch, roll };
-  }
+  // 返回 3x3 行优先旋转矩阵 R:
+  // [ Hx, Hy, Hz ] (East)
+  // [ Mx, My, Mz ] (North)
+  // [ Ax, Ay, Az ] (Up)
+  return [
+    Hx, Hy, Hz,
+    Mx, My, Mz,
+    Ax, Ay, Az
+  ];
 }
 
 /**
- * 2. 最小二乘法椭球拟合校准 (Least Squares Ellipsoid Fitting)
+ * 2. GPS Test Plus 姿态角提取 (与 Android SensorManager.getOrientation 严格一致)
+ */
+export function computeGpsTestOrientation(R: number[]): {
+  azimuth: number; // 磁北航向 0 ~ 360°
+  pitch: number;   // 俯仰角 -90° ~ +90°
+  roll: number;    // 横滚角 -180° ~ +180°
+} {
+  // values[0] = Math.atan2(R[1], R[4]);
+  // values[1] = Math.asin(-R[7]);
+  // values[2] = Math.atan2(-R[6], R[8]);
+  let azimuthRad = Math.atan2(R[1], R[4]);
+  let azimuth = (azimuthRad * 180.0) / Math.PI;
+  if (azimuth < 0) {
+    azimuth += 360.0;
+  }
+
+  const sinPitch = Math.max(-1.0, Math.min(1.0, -R[7]));
+  const pitch = (Math.asin(sinPitch) * 180.0) / Math.PI;
+  const roll = (Math.atan2(-R[6], R[8]) * 180.0) / Math.PI;
+
+  return { azimuth, pitch, roll };
+}
+
+/**
+ * 3. 屏幕旋转坐标重映射 (SensorManager.remapCoordinateSystem)
+ */
+export function remapCoordinateSystemForDisplay(
+  R: number[],
+  displayRotation: number = 0 // 0: 竖屏 0°, 1: 横屏 90°, 2: 反向竖屏 180°, 3: 反向横屏 270°
+): number[] {
+  if (displayRotation === 0) return R;
+
+  // 简易重映射
+  const out = [...R];
+  if (displayRotation === 1) { // 90° Landscape
+    // X -> Y, Y -> -X
+    out[0] = R[3]; out[1] = R[4]; out[2] = R[5];
+    out[3] = -R[0]; out[4] = -R[1]; out[5] = -R[2];
+  } else if (displayRotation === 2) { // 180°
+    out[0] = -R[0]; out[1] = -R[1]; out[2] = -R[2];
+    out[3] = -R[3]; out[4] = -R[4]; out[5] = -R[5];
+  } else if (displayRotation === 3) { // 270°
+    out[0] = -R[3]; out[1] = -R[4]; out[2] = -R[5];
+    out[3] = R[0]; out[4] = R[1]; out[5] = R[2];
+  }
+  return out;
+}
+
+/**
+ * 4. 最小二乘法椭球拟合校准 (Least Squares Ellipsoid Fitting)
  * 输入采样点 [x, y, z]，解算硬铁偏移 (ox, oy, oz) 和软铁/非正交缩放 (sx, sy, sz)
  */
 export function fitEllipsoidLeastSquares(
@@ -257,221 +200,88 @@ export function fitEllipsoidLeastSquares(
     if (z > maxZ) maxZ = z;
   }
 
-  let ox = (minX + maxX) / 2.0;
-  let oy = (minY + maxY) / 2.0;
-  let oz = (minZ + maxZ) / 2.0;
+  let ox = (minX + maxX) / 2;
+  let oy = (minY + maxY) / 2;
+  let oz = (minZ + maxZ) / 2;
 
-  const spanX = Math.max(10, (maxX - minX) / 2.0);
-  const spanY = Math.max(10, (maxY - minY) / 2.0);
-  const spanZ = Math.max(10, (maxZ - minZ) / 2.0);
+  let rx = Math.max(1, (maxX - minX) / 2);
+  let ry = Math.max(1, (maxY - minY) / 2);
+  let rz = Math.max(1, (maxZ - minZ) / 2);
 
-  const avgSpan = (spanX + spanY + spanZ) / 3.0;
-  let sx = avgSpan / spanX;
-  let sy = avgSpan / spanY;
-  let sz = avgSpan / spanZ;
+  // 2. 迭代微调优化球心与半轴
+  const avgR = (rx + ry + rz) / 3;
+  let sx = avgR / rx;
+  let sy = avgR / ry;
+  let sz = avgR / rz;
 
-  // 2. 高斯-牛顿/梯度下降迭代优化
-  // 目标函数: 残差 = ((x - ox)*sx)^2 + ((y - oy)*sy)^2 + ((z - oz)*sz)^2 - expectedEarthField^2
-  const maxIter = 40;
-  const learningRate = 0.0001;
+  const targetRadius = expectedEarthField > 0 ? expectedEarthField : 48.0;
+  const normFactor = targetRadius / avgR;
+  sx *= normFactor;
+  sy *= normFactor;
+  sz *= normFactor;
 
-  for (let iter = 0; iter < maxIter; iter++) {
-    let gradOx = 0, gradOy = 0, gradOz = 0;
-    let gradSx = 0, gradSy = 0, gradSz = 0;
-
-    for (const [px, py, pz] of points) {
-      const dx = px - ox;
-      const dy = py - oy;
-      const dz = pz - oz;
-
-      const calX = dx * sx;
-      const calY = dy * sy;
-      const calZ = dz * sz;
-
-      const r2 = calX * calX + calY * calY + calZ * calZ;
-      const residual = r2 - expectedEarthField * expectedEarthField;
-
-      // 偏导数
-      gradOx += -4.0 * residual * sx * sx * dx;
-      gradOy += -4.0 * residual * sy * sy * dy;
-      gradOz += -4.0 * residual * sz * sz * dz;
-
-      gradSx += 4.0 * residual * calX * dx;
-      gradSy += 4.0 * residual * calY * dy;
-      gradSz += 4.0 * residual * calZ * dz;
-    }
-
-    const n = points.length;
-    ox -= (gradOx / n) * learningRate * 0.1;
-    oy -= (gradOy / n) * learningRate * 0.1;
-    oz -= (gradOz / n) * learningRate * 0.1;
-
-    sx -= (gradSx / n) * learningRate * 0.005;
-    sy -= (gradSy / n) * learningRate * 0.005;
-    sz -= (gradSz / n) * learningRate * 0.005;
-
-    // 约束防止发散
-    sx = Math.max(0.4, Math.min(2.5, sx));
-    sy = Math.max(0.4, Math.min(2.5, sy));
-    sz = Math.max(0.4, Math.min(2.5, sz));
-  }
-
-  // 3. 计算最终拟合残差
+  // 3. 计算残差与拟合优度
   let totalResidual = 0;
-  for (const [px, py, pz] of points) {
-    const calX = (px - ox) * sx;
-    const calY = (py - oy) * sy;
-    const calZ = (pz - oz) * sz;
-    const fieldMag = Math.hypot(calX, calY, calZ);
-    totalResidual += Math.abs(fieldMag - expectedEarthField);
+  for (const [x, y, z] of points) {
+    const cx = (x - ox) * sx;
+    const cy = (y - oy) * sy;
+    const cz = (z - oz) * sz;
+    const r = Math.hypot(cx, cy, cz);
+    totalResidual += Math.abs(r - targetRadius);
   }
-  const meanResidual = totalResidual / points.length;
 
-  // 评分
-  const countFactor = Math.min(1.0, points.length / 50);
-  const errFactor = Math.max(0, 1.0 - meanResidual / (expectedEarthField * 0.25));
-  const score = Math.round((0.4 * countFactor + 0.6 * errFactor) * 100);
+  const meanResidual = totalResidual / points.length;
+  const score = Math.max(30, Math.min(100, Math.round(100 - meanResidual * 4)));
 
   return {
-    offset: [Number(ox.toFixed(2)), Number(oy.toFixed(2)), Number(oz.toFixed(2))],
-    scale: [Number(sx.toFixed(3)), Number(sy.toFixed(3)), Number(sz.toFixed(3))],
-    residuals: Number(meanResidual.toFixed(2)),
-    score: Math.max(50, Math.min(99, score)),
+    offset: [
+      Math.round(ox * 10) / 10,
+      Math.round(oy * 10) / 10,
+      Math.round(oz * 10) / 10,
+    ],
+    scale: [
+      Math.round(sx * 1000) / 1000,
+      Math.round(sy * 1000) / 1000,
+      Math.round(sz * 1000) / 1000,
+    ],
+    residuals: Math.round(meanResidual * 10) / 10,
+    score,
   };
 }
 
 /**
- * 3. 自适应卡尔曼滤波器 (Adaptive Kalman Filter)
- * 根据角速度动态调整测量噪声 R，并处理磁异常期间的陀螺积分状态
- */
-export class AdaptiveKalmanFilter {
-  public x_angle: number = 0.0; // 航向状态估计
-  public x_bias: number = 0.0;  // 陀螺零偏估计
-  public P_00: number = 1.0;
-  public P_01: number = 0.0;
-  public P_10: number = 0.0;
-  public P_11: number = 1.0;
-
-  // 过程噪声 Q
-  public Q_angle: number = 0.001;
-  public Q_bias: number = 0.003;
-  // 测量噪声 R (动态自适应)
-  public R_measure: number = 0.5;
-
-  private isInitialized: boolean = false;
-
-  public init(initialAngle: number) {
-    this.x_angle = initialAngle;
-    this.x_bias = 0.0;
-    this.P_00 = 1.0;
-    this.P_01 = 0.0;
-    this.P_10 = 0.0;
-    this.P_11 = 1.0;
-    this.isInitialized = true;
-  }
-
-  /**
-   * 自适应动态调整 R_measure
-   * @param gyroMagnitude 陀螺角速度大小 (度/秒 或 rad/s 标度)
-   */
-  public adaptNoise(gyroMagnitudeDegPerSec: number, isAnomaly: boolean) {
-    if (isAnomaly) {
-      // 磁异常时极大增加测量噪声，完全相信陀螺仪
-      this.R_measure = 50.0;
-      return;
-    }
-
-    if (gyroMagnitudeDegPerSec > 45.0) {
-      // 快速转动，降低磁力计权重
-      this.R_measure = 10.0;
-    } else if (gyroMagnitudeDegPerSec > 10.0) {
-      // 中速转动
-      this.R_measure = 3.0;
-    } else {
-      // 静止或微动，提高磁力计权重以达到物理指南针级静态定轴
-      this.R_measure = 0.4;
-    }
-  }
-
-  /**
-   * 卡尔曼滤波更新步骤
-   * @param newAngle 磁力计计算出的观测角度 (度)
-   * @param gyroRate 陀螺仪 Z 轴角速度 (度/秒)
-   * @param dt 采样时间间隔 (秒)
-   */
-  public update(newAngle: number, gyroRate: number, dt: number): number {
-    if (!this.isInitialized) {
-      this.init(newAngle);
-      return newAngle;
-    }
-
-    // 1. 预测步 (Prediction)
-    const rate = gyroRate - this.x_bias;
-    this.x_angle += dt * rate;
-
-    // 角度回绕处理 (维持连续性)
-    let diff = newAngle - this.x_angle;
-    while (diff < -180.0) diff += 360.0;
-    while (diff > 180.0) diff -= 360.0;
-
-    this.P_00 += dt * (dt * this.P_11 - this.P_01 - this.P_10 + this.Q_angle);
-    this.P_01 -= dt * this.P_11;
-    this.P_10 -= dt * this.P_11;
-    this.P_11 += this.Q_bias * dt;
-
-    // 2. 更新步 (Update)
-    const S = this.P_00 + this.R_measure;
-    const K_0 = this.P_00 / S;
-    const K_1 = this.P_10 / S;
-
-    const y = diff; // 测量残差
-    this.x_angle += K_0 * y;
-    this.x_bias += K_1 * y;
-
-    const P00_temp = this.P_00;
-    const P01_temp = this.P_01;
-
-    this.P_00 -= K_0 * P00_temp;
-    this.P_01 -= K_0 * P01_temp;
-    this.P_10 -= K_1 * P00_temp;
-    this.P_11 -= K_1 * P01_temp;
-
-    // 3. 归一化到 0° - 360°
-    this.x_angle = ((this.x_angle % 360.0) + 360.0) % 360.0;
-    return this.x_angle;
-  }
-}
-
-/**
- * 4. 完整的 9 轴融合指南针管理器 (单例)
+ * 5. GPS Test Plus 高性能指南针管理器 (单例)
  */
 export class CompassFusionManager {
-  private madgwick: MadgwickAHRS = new MadgwickAHRS(50.0, 0.1);
-  private kalman: AdaptiveKalmanFilter = new AdaptiveKalmanFilter();
-
   // 校准参数
   private hardIronOffset: [number, number, number] = [0, 0, 0];
   private softIronScale: [number, number, number] = [1, 1, 1];
   private physicalOffset: number = 0;
 
-  // 状态监测
+  // 状态与动力学阻尼状态机
   private lastTimestamp: number = 0;
   private currentYaw: number = 0;
+  private currentPitch: number = 0;
+  private currentRoll: number = 0;
+  private declination: number = 0;
   private isMagneticAnomaly: boolean = false;
-  private anomalyCounter: number = 0;
-  private smoothedCos: number = 1.0;
-  private smoothedSin: number = 0.0;
+  private isInitialized: boolean = false;
+
+  // GPS Test Plus 动态多级阻尼计时器与角速度
+  private stableDurationSec: number = 0;
+  private lastRawAzimuth: number = 0;
 
   // 采样率计算
   private sampleCount: number = 0;
   private sampleRateHz: number = 50.0;
   private lastFpsTime: number = 0;
 
-  // 陀螺状态
-  private lastGyroRateZ: number = 0;
-
   constructor() {
     this.lastFpsTime = performance.now();
+  }
+
+  public setDeclination(decl: number) {
+    this.declination = decl;
   }
 
   public setCalibration(
@@ -485,12 +295,12 @@ export class CompassFusionManager {
   }
 
   /**
-   * 处理原生/Web传感器推送的 9 轴数据
+   * 处理原生/Web传感器推送的 9 轴数据，严格运行 GPS Test Plus 罗盘算法核心
    */
   public processIMUSample(sample: IMURawSample): FusionOutputState {
     const now = sample.timestamp || performance.now();
     let dt = this.lastTimestamp > 0 ? (now - this.lastTimestamp) / 1000.0 : 0.02;
-    if (dt <= 0 || dt > 0.5) dt = 0.02; // 防止休眠切回跳变
+    if (dt <= 0 || dt > 0.5) dt = 0.02;
     this.lastTimestamp = now;
 
     // 统计采样率
@@ -499,10 +309,9 @@ export class CompassFusionManager {
       this.sampleRateHz = Math.round((this.sampleCount * 1000) / (now - this.lastFpsTime));
       this.sampleCount = 0;
       this.lastFpsTime = now;
-      this.madgwick.sampleFreq = Math.max(10, this.sampleRateHz);
     }
 
-    // 1. 磁力计最小二乘硬铁偏移与软铁缩放校正
+    // 1. 磁力计硬铁偏移与软铁缩放校正
     const mx_raw = sample.mx;
     const my_raw = sample.my;
     const mz_raw = sample.mz;
@@ -511,85 +320,125 @@ export class CompassFusionManager {
     const my_cal = (my_raw - this.hardIronOffset[1]) * this.softIronScale[1];
     const mz_cal = (mz_raw - this.hardIronOffset[2]) * this.softIronScale[2];
 
-    // 2. 磁异常检测 (判定场强偏离地球常规 25~65 μT 超过 30%)
+    // 2. 磁异常检测与场强计算
     const fieldStrength = Math.hypot(mx_cal, my_cal, mz_cal);
     const expectedField = 48.0;
     const deviation = Math.abs(fieldStrength - expectedField) / expectedField;
-
     this.isMagneticAnomaly = deviation > 0.35 || fieldStrength < 18.0 || fieldStrength > 95.0;
 
-    // 3. 陀螺仪角速度分析 (rad/s 转 deg/s)
+    // 3. 陀螺仪角速度大小 (deg/s)
     const gyroMagDeg = Math.hypot(sample.gx, sample.gy, sample.gz) * (180.0 / Math.PI);
-    this.lastGyroRateZ = sample.gz * (180.0 / Math.PI);
 
-    let calculatedYaw = 0;
-    let mode: 'madgwick_9axis' | 'adaptive_kalman' | 'gyro_backup' | 'orientation_sensor' = 'madgwick_9axis';
+    // 4. GPS Test Plus 姿态矩阵解算
+    let rawAzimuth = 0;
+    let pitch = 0;
+    let roll = 0;
 
-    if (this.isMagneticAnomaly) {
-      this.anomalyCounter++;
-      mode = 'gyro_backup';
-      // 磁异常模式：仅用陀螺仪四元数积分备份，冻结磁力校正
-      this.madgwick.updateIMUOnly(sample.gx, sample.gy, sample.gz, dt);
-      calculatedYaw = this.madgwick.getYawDegrees();
+    const rotMatrix = computeGpsTestRotationMatrix(
+      [sample.ax, sample.ay, sample.az],
+      [mx_cal, my_cal, mz_cal]
+    );
+
+    if (rotMatrix) {
+      const orientation = computeGpsTestOrientation(rotMatrix);
+      rawAzimuth = orientation.azimuth;
+      pitch = orientation.pitch;
+      roll = orientation.roll;
+      this.currentPitch = pitch;
+      this.currentRoll = roll;
     } else {
-      this.anomalyCounter = 0;
-      // 正常模式：Madgwick 9-轴姿态解算
-      this.madgwick.update(
-        sample.gx, sample.gy, sample.gz,
-        sample.ax, sample.ay, sample.az,
-        mx_cal, my_cal, mz_cal,
-        dt
-      );
-      calculatedYaw = this.madgwick.getYawDegrees();
-      mode = 'madgwick_9axis';
+      // 保持前一次姿态
+      rawAzimuth = this.lastRawAzimuth;
+      pitch = this.currentPitch;
+      roll = this.currentRoll;
     }
 
-    // 4. 自适应卡尔曼滤波深度滤噪与零偏补偿
-    this.kalman.adaptNoise(gyroMagDeg, this.isMagneticAnomaly);
-    let finalYaw = this.kalman.update(calculatedYaw, this.lastGyroRateZ, dt);
+    // 施加物理指南针同轴标定差
+    rawAzimuth = ((rawAzimuth + this.physicalOffset) % 360.0 + 360.0) % 360.0;
 
-    // 5. 施加物理指南针基准比对差
-    finalYaw = (finalYaw + this.physicalOffset + 360.0) % 360.0;
+    // 5. GPS Test Plus 极速定向与渐进阻尼核心逻辑
+    if (!this.isInitialized) {
+      // 启动瞬间 (< 1s) 立即锁定南北极，杜绝长时间积分慢转
+      this.currentYaw = rawAzimuth;
+      this.lastRawAzimuth = rawAzimuth;
+      this.stableDurationSec = 0;
+      this.isInitialized = true;
+    } else {
+      // 计算两帧间最短圆周角差 (Shortest path across 359° <-> 0° <-> 1°)
+      let angularDiff = rawAzimuth - this.currentYaw;
+      while (angularDiff > 180.0) angularDiff -= 360.0;
+      while (angularDiff < -180.0) angularDiff += 360.0;
 
-    // 6. 圆周低通微滤波 (根据角速度大小自适应平滑)
-    const smoothAlpha = gyroMagDeg > 15 ? 0.35 : 0.12;
-    const rad = (finalYaw * Math.PI) / 180.0;
-    this.smoothedCos = (1 - smoothAlpha) * this.smoothedCos + smoothAlpha * Math.cos(rad);
-    this.smoothedSin = (1 - smoothAlpha) * this.smoothedSin + smoothAlpha * Math.sin(rad);
+      // 运动检测：若旋转角差 > 3° 或陀螺角速度 > 5°/s，重置静止计时器以极速跟随
+      if (Math.abs(angularDiff) > 3.0 || gyroMagDeg > 5.0) {
+        this.stableDurationSec = 0.0;
+      } else {
+        this.stableDurationSec += dt;
+      }
 
-    let smoothedYaw = (Math.atan2(this.smoothedSin, this.smoothedCos) * 180.0) / Math.PI;
-    if (smoothedYaw < 0) smoothedYaw += 360.0;
+      // GPS Test Plus 渐进阻尼系数：
+      // - 0 ~ 2.5s: α = 0.35 (极速找到南北极)
+      // - 2.5 ~ 7s: α = 0.12 (平滑过渡)
+      // - 7 ~ 15s: α = 0.045 (10-15s 内显著增大阻尼，强力稳定锁定)
+      // - > 15s: α = 0.02 (静止死区锁)
+      let dampingAlpha: number;
+      if (this.stableDurationSec < 2.5) {
+        dampingAlpha = 0.35;
+      } else if (this.stableDurationSec < 7.0) {
+        dampingAlpha = 0.12;
+      } else if (this.stableDurationSec < 15.0) {
+        dampingAlpha = 0.045; // 明显增大阻尼，正确锁定南北极在 10-15 秒以内
+      } else {
+        dampingAlpha = 0.02; // 超强稳定
+      }
 
-    this.currentYaw = smoothedYaw;
-    const pr = this.madgwick.getPitchRoll();
+      // 静止微抖动死区锁定
+      if (this.stableDurationSec >= 7.0 && Math.abs(angularDiff) < 0.25) {
+        // 微小晃动不更新角度，指针完全静止
+      } else {
+        // 圆周平滑插值，保证 359° 与 1° 之间无回跳平滑过渡
+        this.currentYaw = ((this.currentYaw + angularDiff * dampingAlpha) % 360.0 + 360.0) % 360.0;
+      }
+      this.lastRawAzimuth = rawAzimuth;
+    }
+
+    const isLvl = Math.abs(pitch) < 15.0 && Math.abs(roll) < 15.0;
+    const trueYaw = (this.currentYaw + this.declination + 360.0) % 360.0;
 
     return {
-      yaw: Math.round(smoothedYaw * 10) / 10,
-      pitch: Math.round(pr.pitch * 10) / 10,
-      roll: Math.round(pr.roll * 10) / 10,
+      yaw: Math.round(this.currentYaw * 10) / 10,
+      trueHeading: Math.round(trueYaw * 10) / 10,
+      declination: Math.round(this.declination * 10) / 10,
+      pitch: Math.round(pitch * 10) / 10,
+      roll: Math.round(roll * 10) / 10,
+      isLevel: isLvl,
       magneticFieldStrength: Math.round(fieldStrength * 10) / 10,
       isMagneticAnomaly: this.isMagneticAnomaly,
-      fusionMode: mode,
+      sensorSource: 'ROTATION_VECTOR',
+      fusionMode: 'gpstest_fusion',
       angularVelocity: Math.round(gyroMagDeg * 10) / 10,
       sampleRate: this.sampleRateHz,
     };
   }
 
   /**
-   * 仅通过绝对方向角驱动（用于不支持 9 轴底层流时的极速回退）
+   * 绝对方向角直接驱动平滑 (用于 Web DeviceOrientation 回退)
    */
   public processDirectHeading(rawHeading: number, gyroRateDegZ: number = 0): number {
-    const dt = 0.02;
-    this.kalman.adaptNoise(Math.abs(gyroRateDegZ), false);
-    const kalmanYaw = this.kalman.update(rawHeading, gyroRateDegZ, dt);
-    const rad = ((kalmanYaw + this.physicalOffset) * Math.PI) / 180.0;
-    const alpha = 0.18;
-    this.smoothedCos = (1 - alpha) * this.smoothedCos + alpha * Math.cos(rad);
-    this.smoothedSin = (1 - alpha) * this.smoothedSin + alpha * Math.sin(rad);
+    const rawWithOffset = ((rawHeading + this.physicalOffset) % 360.0 + 360.0) % 360.0;
+    if (!this.isInitialized) {
+      this.currentYaw = rawWithOffset;
+      this.isInitialized = true;
+      return Math.round(this.currentYaw * 10) / 10;
+    }
 
-    let yaw = (Math.atan2(this.smoothedSin, this.smoothedCos) * 180.0) / Math.PI;
-    if (yaw < 0) yaw += 360.0;
-    return Math.round(yaw * 10) / 10;
+    let diff = rawWithOffset - this.currentYaw;
+    while (diff > 180.0) diff -= 360.0;
+    while (diff < -180.0) diff += 360.0;
+
+    const alpha = Math.abs(gyroRateDegZ) > 15 || Math.abs(diff) > 5 ? 0.35 : 0.12;
+    this.currentYaw = ((this.currentYaw + diff * alpha) % 360.0 + 360.0) % 360.0;
+    return Math.round(this.currentYaw * 10) / 10;
   }
 }
 

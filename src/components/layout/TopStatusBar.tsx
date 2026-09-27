@@ -150,9 +150,12 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
             </button>
           )}
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-blue-600 text-white flex items-center justify-center text-xs font-bold shadow-xs">
-              Δ
-            </div>
+            <img
+              src="/app-icon.jpg"
+              alt="RTK"
+              className="w-6 h-6 rounded-md object-cover shadow-xs border border-slate-200 shrink-0"
+              referrerPolicy="no-referrer"
+            />
             <h1 className="text-sm font-bold text-slate-900 tracking-tight leading-tight">{displayTitle}</h1>
           </div>
         </div>

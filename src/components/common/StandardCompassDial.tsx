@@ -74,6 +74,15 @@ export const StandardCompassDial: React.FC<StandardCompassDialProps> = ({
     { deg: 330, label: '330' },
   ];
 
+  // Continuous unwrapped dial angle to prevent 360° spin when crossing 359° <-> 0° <-> 1°
+  const continuousDialAngleRef = React.useRef<number>(-heading);
+  const targetDialAngle = -heading;
+  let diff = targetDialAngle - continuousDialAngleRef.current;
+  while (diff > 180) diff -= 360;
+  while (diff < -180) diff += 360;
+  continuousDialAngleRef.current += diff;
+  const dialAngleDeg = continuousDialAngleRef.current;
+
   return (
     <div
       className={`relative shrink-0 aspect-square flex items-center justify-center select-none ${className}`}
@@ -119,8 +128,8 @@ export const StandardCompassDial: React.FC<StandardCompassDialProps> = ({
         {/* [USER REQ] 标准航向罗盘的指针与罗盘耦合：指针置于旋转盘内，红北针严格锁定盘面0°(北)，盘针整体同步旋转 */}
         <g
           id="standard-rotating-dial-plate"
-          transform={`rotate(${-heading}, ${cx}, ${cy})`}
-          className="transition-transform duration-100 ease-out"
+          transform={`rotate(${dialAngleDeg}, ${cx}, ${cy})`}
+          className="transition-transform duration-400 ease-out"
         >
           {/* Subtle crosshairs aligned with dial */}
           <line x1={cx - ringInnerR + 10} y1={cy} x2={cx + ringInnerR - 10} y2={cy} stroke="#E2E8F0" strokeWidth="0.8" />

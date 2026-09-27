@@ -26,7 +26,7 @@ interface SurveyCompassDialProps {
 export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
   heading = 308,
   className = '',
-  size = 370,
+  size = 570,
   numberMode = 'cardinal',
   dialRotation: controlledRotation,
   onRotationChange,
@@ -65,13 +65,13 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
   const ringInnerR = 118;
   const boxInnerR = 94;
 
-  // Dial degrees formula matching Authentic Chinese Geological Transit:
-  // 180° is TOP (12 o'clock, 南 S)
-  // 90° is LEFT (9 o'clock, 東 E)
-  // 360° is BOTTOM (6 o'clock, 北 N)
-  // 270° is RIGHT (3 o'clock, 西 W)
+  // Dial degrees formula matching Authentic Chinese Geological Transit (直读式地质罗盘):
+  // 360° / 0° is TOP (12 o'clock, 北 N, 瞄准觇板方向)
+  // 90° is LEFT (9 o'clock, 東 E, 照准东时指针直读东)
+  // 180° is BOTTOM (6 o'clock, 南 S)
+  // 270° is RIGHT (3 o'clock, 西 W, 照准西时指针直读西)
   // When forward sight is aimed at azimuth H, the magnetic North needle tip (red N) directly reads H on this scale!
-  const getScreenAngle = (deg: number) => (deg - 270) * (Math.PI / 180);
+  const getScreenAngle = (deg: number) => ((270 - deg) * Math.PI) / 180;
 
   // Generate ticks for dial scale
   const ticks = [];
@@ -92,17 +92,17 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
     let labelText = '';
     let isCardinal = false;
 
-    if (d === 180) {
+    if (d === 0 || d === 360) {
       showLabel = true;
-      labelText = '180';
+      labelText = '360';
       isCardinal = true;
     } else if (d === 90) {
       showLabel = true;
       labelText = '90';
       isCardinal = true;
-    } else if (d === 0 || d === 360) {
+    } else if (d === 180) {
       showLabel = true;
-      labelText = '360';
+      labelText = '180';
       isCardinal = true;
     } else if (d === 270) {
       showLabel = true;
@@ -178,10 +178,15 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
 
   // Needle Angle Calculation:
   // Decoupled from dial rotation!
-  // Base needle orientation is pointing straight UP to 12 o'clock (toward Magnetic North at heading 0°).
-  // When forward direction is at azimuth `heading`, Magnetic North is at screen angle `-heading`.
-  // When user rotates the dial, the dial turns independently while the magnetic needle remains locked to North/South!
-  const needleAngleDeg = -heading;
+  // Continuous unwrapped rotation angle: guarantees smooth transition when crossing 359° <-> 0° <-> 1°
+  // without spinning 360° in CSS transitions.
+  const continuousNeedleAngleRef = useRef<number>(-heading);
+  const targetNeedleAngle = -heading;
+  let diff = targetNeedleAngle - continuousNeedleAngleRef.current;
+  while (diff > 180) diff -= 360;
+  while (diff < -180) diff += 360;
+  continuousNeedleAngleRef.current += diff;
+  const needleAngleDeg = continuousNeedleAngleRef.current;
 
   return (
     <div className={`relative flex flex-col items-center select-none ${className}`}>
@@ -259,22 +264,22 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           ))}
 
           {/* 4 Cardinal Directions Yellow Badge Boxes matching 中国地质罗盘: 东南西北用正黄 */}
-          {/* 南 (180°) - Top (12 o'clock) */}
+          {/* 北 (360° / 0°) - Top (12 o'clock) */}
           <rect x={cx - 13} y={cy - ringInnerR + 2} width="26" height="23" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
           <text x={cx} y={cy - ringInnerR + 13} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
-            南
-          </text>
-          <text x={cx} y={cy - ringInnerR + 32} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
-            S
-          </text>
-
-          {/* 北 (360° / 0°) - Bottom (6 o'clock) */}
-          <rect x={cx - 13} y={cy + ringInnerR - 25} width="26" height="23" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
-          <text x={cx} y={cy + ringInnerR - 14} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
             北
           </text>
-          <text x={cx} y={cy + ringInnerR - 33} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
+          <text x={cx} y={cy - ringInnerR + 32} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
             N
+          </text>
+
+          {/* 南 (180°) - Bottom (6 o'clock) */}
+          <rect x={cx - 13} y={cy + ringInnerR - 25} width="26" height="23" fill="#FFE500" stroke="#854D0E" strokeWidth="1.2" rx="1" />
+          <text x={cx} y={cy + ringInnerR - 14} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="13" fontWeight="900">
+            南
+          </text>
+          <text x={cx} y={cy + ringInnerR - 33} textAnchor="middle" dominantBaseline="central" fill="#000000" fontSize="11" fontWeight="900">
+            S
           </text>
 
           {/* 東 (90°) - Left (9 o'clock) */}
@@ -296,39 +301,7 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
           </text>
 
           {/* 4 Quadrants: 东南、西南、东北、西北用正红字底 (纯正红色背景，纯白粗体文字) */}
-          {/* 東南 (Top-Left, 135°, between 180 南 and 90 東) */}
-          {(() => {
-            const rad = getScreenAngle(135);
-            const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
-            const y = cy + ((ringInnerR + boxInnerR) / 2) * Math.sin(rad);
-            const rot = (rad * 180) / Math.PI + 90;
-            return (
-              <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
-                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
-                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
-                  東南
-                </text>
-              </g>
-            );
-          })()}
-
-          {/* 西南 (Top-Right, 225°, between 180 南 and 270 西) */}
-          {(() => {
-            const rad = getScreenAngle(225);
-            const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
-            const y = cy + ((ringInnerR + boxInnerR) / 2) * Math.sin(rad);
-            const rot = (rad * 180) / Math.PI + 90;
-            return (
-              <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
-                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
-                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
-                  西南
-                </text>
-              </g>
-            );
-          })()}
-
-          {/* 東北 (Bottom-Left, 45°, between 360 北 and 90 東) */}
+          {/* 東北 (Top-Left, 45°, between 0 北 and 90 東) */}
           {(() => {
             const rad = getScreenAngle(45);
             const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
@@ -344,7 +317,39 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
             );
           })()}
 
-          {/* 西北 (Bottom-Right, 315°, between 360 北 and 270 西) */}
+          {/* 東南 (Bottom-Left, 135°, between 90 東 and 180 南) */}
+          {(() => {
+            const rad = getScreenAngle(135);
+            const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
+            const y = cy + ((ringInnerR + boxInnerR) / 2) * Math.sin(rad);
+            const rot = (rad * 180) / Math.PI + 90;
+            return (
+              <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
+                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
+                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
+                  東南
+                </text>
+              </g>
+            );
+          })()}
+
+          {/* 西南 (Bottom-Right, 225°, between 180 南 and 270 西) */}
+          {(() => {
+            const rad = getScreenAngle(225);
+            const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
+            const y = cy + ((ringInnerR + boxInnerR) / 2) * Math.sin(rad);
+            const rot = (rad * 180) / Math.PI + 90;
+            return (
+              <g transform={`translate(${x}, ${y}) rotate(${rot})`}>
+                <rect x="-16" y="-10" width="32" height="20" fill="#DC2626" stroke="#991B1B" strokeWidth="1" rx="1.5" />
+                <text x="0" y="1" textAnchor="middle" dominantBaseline="central" fill="#FFFFFF" fontSize="10.5" fontWeight="900">
+                  西南
+                </text>
+              </g>
+            );
+          })()}
+
+          {/* 西北 (Top-Right, 315°, between 270 西 and 360 北) */}
           {(() => {
             const rad = getScreenAngle(315);
             const x = cx + ((ringInnerR + boxInnerR) / 2) * Math.cos(rad);
