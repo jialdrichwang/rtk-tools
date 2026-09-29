@@ -12,6 +12,10 @@ interface SurveyCompassDialProps {
   showForwardMarker?: boolean;
   filterMode?: 'stable' | 'smooth' | 'direct';
   onToggleFilter?: () => void;
+  isGpsMode?: boolean;
+  effectiveHz?: number;
+  greenCount?: number;
+  redCount?: number;
 }
 
 /**
@@ -33,6 +37,10 @@ export const SurveyCompassDial: React.FC<SurveyCompassDialProps> = ({
   showForwardMarker = true,
   filterMode = 'stable',
   onToggleFilter,
+  isGpsMode = false,
+  effectiveHz = 0,
+  greenCount,
+  redCount,
 }) => {
   const [internalRotation, setInternalRotation] = useState(0);
   const currentRotation = controlledRotation !== undefined ? controlledRotation : internalRotation;

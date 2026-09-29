@@ -4,6 +4,7 @@ interface StandardCompassDialProps {
   heading: number; // 0 to 360 degrees
   size?: number; // pixel diameter
   className?: string;
+  isGpsMode?: boolean;
 }
 
 /**
@@ -20,6 +21,7 @@ export const StandardCompassDial: React.FC<StandardCompassDialProps> = ({
   heading = 0,
   size = 280,
   className = '',
+  isGpsMode = false,
 }) => {
   const cx = 160;
   const cy = 160;

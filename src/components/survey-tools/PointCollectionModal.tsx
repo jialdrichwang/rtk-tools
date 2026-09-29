@@ -9,6 +9,8 @@ import {
 } from '../../utils/fileStorageService';
 import { MapPin, CheckCircle2, RotateCw, X, Radio } from 'lucide-react';
 import { soundService } from '../../utils/sound';
+import { BaselineFrequencyBar } from '../common/BaselineFrequencyBar';
+import { gpsBaselineFilter } from '../../utils/gpsBaselineFilter';
 
 interface PointCollectionModalProps {
   onClose: () => void;
@@ -36,6 +38,16 @@ export const PointCollectionModal: React.FC<PointCollectionModalProps> = ({ onCl
   const [accumLat, setAccumLat] = useState(0);
   const [accumLon, setAccumLon] = useState(0);
   const [accumAlt, setAccumAlt] = useState(0);
+
+  // Live 1-second locked GPS signal sampling rate (Hz)
+  const [effectiveHz, setEffectiveHz] = useState(() => gpsBaselineFilter.getEffectiveHz());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setEffectiveHz(gpsBaselineFilter.getEffectiveHz());
+    }, 200);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
@@ -174,9 +186,15 @@ export const PointCollectionModal: React.FC<PointCollectionModalProps> = ({ onCl
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-center space-y-2">
             <div className="flex items-center justify-between text-xs text-slate-600 font-medium">
               <span>历元进度 ({currentEpoch} / {targetEpochs})</span>
-              <span className="text-blue-600 font-mono font-bold">
-                {Math.round((currentEpoch / targetEpochs) * 100)}%
-              </span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-md border border-slate-200 text-[10px]">
+                  <span className="text-slate-500 font-sans">锁定频率</span>
+                  <BaselineFrequencyBar hz={effectiveHz} size="sm" showLabel />
+                </div>
+                <span className="text-blue-600 font-mono font-bold">
+                  {Math.round((currentEpoch / targetEpochs) * 100)}%
+                </span>
+              </div>
             </div>
 
             {/* Progress bar */}

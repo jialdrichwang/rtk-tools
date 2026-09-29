@@ -32,6 +32,7 @@ import { soundService } from '../../utils/sound';
 import { SurveyCompassDial } from '../common/SurveyCompassDial';
 import { StandardCompassDial } from '../common/StandardCompassDial';
 import { GpsTestCompassDial } from '../common/GpsTestCompassDial';
+import { BaselineFrequencyBar } from '../common/BaselineFrequencyBar';
 import { MagneticFieldGraph } from './MagneticFieldGraph';
 import { SpatialMagneticCalibrationModal } from './SpatialMagneticCalibrationModal';
 import { spatialMagneticService } from '../../utils/spatialMagneticService';
@@ -63,6 +64,17 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
   const [hasCalibrated, setHasCalibrated] = useState(false);
   // Default strictly to 'mag_lock' (地磁南北锁定)
   const [headingMode, setHeadingMode] = useState<'mag_lock' | 'gps_course'>('mag_lock');
+  
+  // 【核心修复】将 isGpsMode 提升至组件最顶层定义，确保在所有回调函数、原生传感器监听器及渲染代码中始终在作用域内 (彻底消除 ReferenceError: isGpsMode is not defined)
+  const isGpsMode = headingMode === 'gps_course';
+
+  // 同步状态到全局 window 对象，保障 Android WebView 或 Native Bridge 无论何时评估 isGpsMode 均安全有值
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).isGpsMode = isGpsMode;
+      (window as any).headingMode = headingMode;
+    }
+  }, [isGpsMode, headingMode]);
   
   // 保留两套指南针模式测算模式：
   // 1. 地质与航向一套 ('geological'): 包括地质罗盘 survey_transit 与现代工程航向盘 standard
@@ -222,6 +234,10 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
 
   const applySensorHeading = useCallback(
     (rawDeg: number) => {
+      // [GPS航向模式] 100% 彻底隔离地磁传感器，防止车体或空间强磁伪影干扰
+      if (isGpsMode) {
+        return;
+      }
       setHasSensor(true);
       let normalized = ((rawDeg % 360) + 360) % 360;
       const now = performance.now();
@@ -339,7 +355,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
         }
       }
     },
-    [filterMode]
+    [filterMode, dialStyle, isGpsMode]
   );
 
   const setManualPresetHeading = (val: number) => {
@@ -376,7 +392,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
               const gzDps = typeof parsed.gz === 'number' ? (parsed.gz * 180) / Math.PI : 0;
               currentGyroZRef.current = gzDps;
               const fusedGps = gpsBaselineFilter.updateGyroRate(gzDps);
-              if (headingMode === 'gps_course') {
+              if (isGpsMode) {
                 setGpsFilteredHeading(fusedGps);
               }
               setFusionState({
@@ -428,7 +444,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
           if (Math.abs(currentGyroZRef.current) < 0.2) {
             currentGyroZRef.current = Math.max(-120, Math.min(120, turnRateDps));
             const fusedGps = gpsBaselineFilter.updateGyroRate(currentGyroZRef.current);
-            if (headingMode === 'gps_course') {
+            if (isGpsMode) {
               setGpsFilteredHeading(fusedGps);
             }
           }
@@ -466,7 +482,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
         const gzDps = e.rotationRate.alpha || 0;
         currentGyroZRef.current = gzDps;
         const fusedGps = gpsBaselineFilter.updateGyroRate(gzDps);
-        if (headingMode === 'gps_course') {
+        if (isGpsMode) {
           setGpsFilteredHeading(fusedGps);
         }
         const gzRad = (gzDps * Math.PI) / 180.0;
@@ -517,7 +533,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
       }
       clearInterval(timer);
     };
-  }, [isOpen, isCalibrating, applySensorHeading, isUsingNative9Axis]);
+  }, [isOpen, isCalibrating, applySensorHeading, isUsingNative9Axis, isGpsMode]);
 
   if (!isOpen) return null;
 
@@ -529,7 +545,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
 
   // In 'mag_lock' mode, heading is strictly locked to geomagnetic North/South
   // In 'gps_course' (GPS航向模式), heading is 100% isolated from geomagnetic sensors!
-  const isGpsMode = headingMode === 'gps_course';
+  // (isGpsMode 已置于组件最顶层定义，此处直接使用)
   const baseRawHeading = isGpsMode
     ? (gpsFilteredHeading || gpsCourseHeading || rtkState.heading || heading || 0)
     : heading;
@@ -757,7 +773,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                 setHeadingMode('gps_course');
               }}
               title="GPS航向模式：基于GPS航迹基线测算与陀螺仪急转导向，100%隔离地磁传感器"
-              className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer flex items-center gap-1 leading-none ${
+              className={`px-2.5 py-1 rounded text-xs font-bold transition cursor-pointer flex items-center gap-1.5 leading-none ${
                 isGpsMode
                   ? 'bg-blue-600 text-white shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -766,9 +782,25 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
               <Navigation className="w-3.5 h-3.5 shrink-0" />
               <span>GPS航向模式</span>
               {isGpsMode && (
-                <span className="text-[10px] bg-blue-700/90 text-blue-100 px-1 py-0.2 rounded font-mono font-medium leading-none">
-                  磁隔离基线
-                </span>
+                <>
+                  <span className="text-[10px] bg-blue-700/90 text-blue-100 px-1.5 py-0.5 rounded font-mono font-medium leading-none">
+                    磁隔离基线
+                  </span>
+                  {/* 【USER REQ】与“GPS航向模式 磁隔离基线”在同一行显示“GPS采样指示”方块灯 (红绿同频同开同关闪动) */}
+                  <span
+                    className="flex items-center gap-1 bg-slate-900/60 text-white px-1.5 py-0.5 rounded font-mono text-[10px] border border-blue-400/40"
+                    title={`GPS采样指示：通过方块灯红绿同频同开同关闪动直观了解采样点下发及采信情况 (当前采信 ${gpsFilterStats.recentGreenCount ?? 0} 个，过滤 ${gpsFilterStats.recentRedCount ?? 6} 个，采样率 ${(gpsFilterStats.effectiveHz || 0).toFixed(1)}Hz)`}
+                  >
+                    <span className="text-[10px] text-blue-200 whitespace-nowrap">GPS采样指示:</span>
+                    <BaselineFrequencyBar
+                      hz={gpsFilterStats.effectiveHz || 0}
+                      greenCount={gpsFilterStats.recentGreenCount}
+                      redCount={gpsFilterStats.recentRedCount}
+                      size="xs"
+                      showLabel={false}
+                    />
+                  </span>
+                </>
               )}
             </button>
           </div>
@@ -980,6 +1012,10 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                   dialRotation={dialRotation}
                   onRotationChange={setDialRotation}
                   filterMode={filterMode}
+                  isGpsMode={isGpsMode}
+                  effectiveHz={isGpsMode ? (gpsFilterStats.effectiveHz || 1.0) : 0}
+                  greenCount={gpsFilterStats.recentGreenCount}
+                  redCount={gpsFilterStats.recentRedCount}
                   onToggleFilter={() => {
                     soundService.playClick();
                     setFilterMode((prev) => (prev === 'stable' ? 'smooth' : prev === 'smooth' ? 'direct' : 'stable'));
@@ -989,6 +1025,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                 <StandardCompassDial
                   heading={activeHeading}
                   size={isLandscape ? 495 : 570}
+                  isGpsMode={isGpsMode}
                 />
               ) : (
                 <GpsTestCompassDial
@@ -1000,6 +1037,7 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                   isLevel={fusionState.isLevel}
                   magneticFieldStrength={fusionState.magneticFieldStrength}
                   size={isLandscape ? 495 : 570}
+                  isGpsMode={isGpsMode}
                 />
               )}
             </div>
@@ -1129,10 +1167,20 @@ export const CompassModal: React.FC<CompassModalProps> = ({ isOpen, onClose }) =
                       <Route className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                      <div className="text-xs font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
                         <span>GPS 航向模式 · 航迹基线测算与十字校正</span>
                         <span className="text-[10px] bg-blue-100 text-blue-800 font-mono px-1.5 py-0.2 rounded-full font-bold">
-                          100% 地磁隔离
+                          磁隔离基线
+                        </span>
+                        <span className="flex items-center gap-1 bg-slate-900 text-white px-1.5 py-0.5 rounded font-mono text-[10px] shadow-2xs">
+                          <span className="text-[10px] text-blue-300">GPS采样指示:</span>
+                          <BaselineFrequencyBar
+                            hz={gpsFilterStats.effectiveHz || 0}
+                            greenCount={gpsFilterStats.recentGreenCount}
+                            redCount={gpsFilterStats.recentRedCount}
+                            size="xs"
+                            showLabel
+                          />
                         </span>
                       </div>
                       <div className="text-[11px] text-slate-500">

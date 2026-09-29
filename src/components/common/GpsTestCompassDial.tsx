@@ -10,6 +10,7 @@ export interface GpsTestCompassDialProps {
   size?: number;   // Pixel diameter
   className?: string;
   isLevel?: boolean;
+  isGpsMode?: boolean;
 }
 
 /**
@@ -33,6 +34,7 @@ export const GpsTestCompassDial: React.FC<GpsTestCompassDialProps> = ({
   size = 360,
   className = '',
   isLevel,
+  isGpsMode = false,
 }) => {
   // SVG 空间坐标系定义 (360x360 纯圆设计)
   const cx = 180;

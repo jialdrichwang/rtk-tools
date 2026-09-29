@@ -103,3 +103,21 @@ html, body, #root {
   scrollbar-width: thin;
   scrollbar-color: #94a3b8 #f1f5f9;
 }
+
+/* GPS 采样指示方块灯：红绿同频同开同关同步闪动 (非流动，完全同步脉冲) */
+@keyframes gps-sync-blink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: brightness(1.25);
+  }
+  50% {
+    opacity: 0.22;
+    transform: scale(0.92);
+    filter: brightness(0.6);
+  }
+}
+
+.animate-gps-sync-blink {
+  animation: gps-sync-blink 0.85s ease-in-out infinite !important;
+}

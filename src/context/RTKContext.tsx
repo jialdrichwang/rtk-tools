@@ -444,15 +444,17 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         prevGpsPosRef.current = { lat, lon, time: now };
       } else {
-        // Stationary check: if stationary for > 2.5s, keep last heading and update status
-        if (now - prev.time > 2500) {
-          setGpsSamplingStats((prevStats) => ({
-            ...prevStats,
-            isMoving: false,
-            currentSpeedMps: 0,
-            statusText: 'GPS移动采样驻留 (锁定最后运动航向，持机走动更新)',
-          }));
-        }
+        // 室外平板固定在脚架或观测桌静止驻留采样优化：
+        // 哪怕平板完全静止不动，历元计数 sampleCount 与 1秒锁定的 Hz 频率持续平滑累加，满足运动指南与方向测算的高流畅反馈需求
+        setGpsSamplingStats((prevStats) => ({
+          ...prevStats,
+          sampleCount: prevStats.sampleCount + 1,
+          lastSampleTime: now,
+          isMoving: false,
+          currentSpeedMps: 0,
+          statusText: 'GPS高频驻留采样中 (平板固定锁定航向，GNSS高频历元持续累加)',
+        }));
+        prevGpsPosRef.current = { lat, lon, time: now };
       }
     } else {
       prevGpsPosRef.current = { lat, lon, time: now };
@@ -947,7 +949,7 @@ export const RTKProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch (err) {
           console.error('Error polling AndroidBridge native GPS:', err);
         }
-      }, 1000 / targetHz);
+      }, 100); // 100ms 硬件级轮询间隔 (最高支持 10Hz 原生高频刷新)
 
       return () => clearInterval(intervalId);
     }

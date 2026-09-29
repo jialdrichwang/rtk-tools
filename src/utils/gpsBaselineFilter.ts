@@ -38,6 +38,10 @@ export interface GpsBaselineStats {
   isSharpTurning: boolean;            // 当前是否处于急转弯/急转向状态
   gyroTurnRateDps: number;            // 陀螺仪转向角速度 (°/s)
   opticalSolarWeight: number;         // 太阳偏振/光影辅助加权
+  effectiveHz: number;                // 磁隔离基线实时有效信号采样频率 (Hz)
+  recentSamplingWindow: boolean[];    // 最近下发采样点采信历史 (true=采信绿, false=异常过滤红)
+  recentGreenCount: number;           // 最近采信通过绿灯数量 (0-6)
+  recentRedCount: number;             // 最近异常过滤红灯数量 (0-6)
   lastFilterReason: string;           // 最近一次过滤或工作状态
 }
 
@@ -71,8 +75,26 @@ export class GpsBaselineFilter {
     isSharpTurning: false,
     gyroTurnRateDps: 0,
     opticalSolarWeight: 0,
+    effectiveHz: 0,
+    recentSamplingWindow: [],
+    recentGreenCount: 0,
+    recentRedCount: 6,
     lastFilterReason: '系统就绪，等待移动采样',
   };
+
+  // 记录最近 6 次采样点下发与采信决策 (true=采信绿灯, false=异常过滤红灯)
+  private recentSamplingDecisions: boolean[] = [];
+
+  private recordSamplingDecision(accepted: boolean): void {
+    this.recentSamplingDecisions.push(accepted);
+    if (this.recentSamplingDecisions.length > 6) {
+      this.recentSamplingDecisions.shift();
+    }
+    const green = this.recentSamplingDecisions.filter(Boolean).length;
+    this.stats.recentSamplingWindow = [...this.recentSamplingDecisions];
+    this.stats.recentGreenCount = green;
+    this.stats.recentRedCount = 6 - green;
+  }
 
   // 融合导航当前估算航向 (0-360°)
   private currentFusedHeading: number = 180;
@@ -181,6 +203,7 @@ export class GpsBaselineFilter {
       this.acceptedPoints.push(first);
       this.baselineWindow = [first];
       this.stats.acceptedPointsCount++;
+      this.recordSamplingDecision(true);
       this.stats.lastFilterReason = '首个基线定位点已锁定';
       return { accepted: true, fusedHeading: this.currentFusedHeading, stats: this.getStats() };
     }
@@ -196,6 +219,7 @@ export class GpsBaselineFilter {
     // -------------------------------------------------------------
     if (instantaneousSpeed > 1000 || (dtSeconds <= 1.0 && distMeters > 1000)) {
       this.stats.rejectedExtremeSpeedCount++;
+      this.recordSamplingDecision(false);
       this.stats.lastFilterReason = `飞点过滤：瞬时速度 ${Math.round(instantaneousSpeed)}m/s (>1000m/s)，已直接丢弃`;
       return { accepted: false, fusedHeading: this.currentFusedHeading, stats: this.getStats() };
     }
@@ -216,6 +240,7 @@ export class GpsBaselineFilter {
       // 1 秒内移动大于 10 米，或者瞬时速度超过平均速度 4.5 倍且 > 8m/s
       if ((dtSeconds <= 1.2 && distMeters > 10.0) || instantaneousSpeed > 10.0) {
         this.stats.rejectedLowSpeedJumpCount++;
+        this.recordSamplingDecision(false);
         this.stats.lastFilterReason = `低速跳变过滤：平均速度 ${avg5MinSpeedKmh.toFixed(1)}km/h 下位移 ${distMeters.toFixed(1)}m/s (>10m)，已滤除`;
         return { accepted: false, fusedHeading: this.currentFusedHeading, stats: this.getStats() };
       }
@@ -224,6 +249,7 @@ export class GpsBaselineFilter {
       const maxAllowedSpeed = Math.max(35.0, avg5MinSpeedMps * 3.0); // 允许最高 3 倍于巡航速度的突变
       if (instantaneousSpeed > maxAllowedSpeed) {
         this.stats.rejectedLowSpeedJumpCount++;
+        this.recordSamplingDecision(false);
         this.stats.lastFilterReason = `高速跳跃变异过滤：瞬时速度 ${instantaneousSpeed.toFixed(1)}m/s 远超巡航均速`;
         return { accepted: false, fusedHeading: this.currentFusedHeading, stats: this.getStats() };
       }
@@ -241,6 +267,12 @@ export class GpsBaselineFilter {
     this.acceptedPoints.push(currentPoint);
     this.stats.acceptedPointsCount++;
     this.stats.currentDisplacementMeters += distMeters;
+    this.recordSamplingDecision(true);
+
+    // 统计近2秒内的有效点计算实时采样频率 (Hz)
+    const twoSecAgo = timestamp - 2000;
+    const recentCount = this.acceptedPoints.filter((p) => p.timestamp >= twoSecAgo).length;
+    this.stats.effectiveHz = Math.round((recentCount / 2.0) * 10) / 10;
 
     // 维护最近用于直线基线拟合的点窗口 (保持近 15 个点或近 150 米范围)
     this.baselineWindow.push(currentPoint);
@@ -481,6 +513,10 @@ export class GpsBaselineFilter {
   public resetSampling(): void {
     this.acceptedPoints = [];
     this.baselineWindow = [];
+    this.recentSamplingDecisions = [];
+    this.stats.recentSamplingWindow = [];
+    this.stats.recentGreenCount = 0;
+    this.stats.recentRedCount = 6;
     this.stats.currentDisplacementMeters = 0;
     this.stats.baselineLengthMeters = 0;
     this.stats.lastFilterReason = '已清空航迹采样历史，准备重新标定';
@@ -488,6 +524,21 @@ export class GpsBaselineFilter {
 
   public getStats(): GpsBaselineStats {
     return { ...this.stats };
+  }
+
+  /**
+   * 获取当前 1 秒内锁定的有效 GPS 采样信号频率 (Hz)
+   */
+  public getEffectiveHz(): number {
+    const now = Date.now();
+    const twoSecAgo = now - 2000;
+    const recent = this.acceptedPoints.filter((p) => p.timestamp >= twoSecAgo).length;
+    if (recent > 0) {
+      const hz = Math.round((recent / 2.0) * 10) / 10;
+      this.stats.effectiveHz = hz;
+      return hz;
+    }
+    return this.stats.effectiveHz || 0;
   }
 }
 
